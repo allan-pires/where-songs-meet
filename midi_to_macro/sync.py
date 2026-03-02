@@ -44,6 +44,7 @@ class Room:
 
         self.on_play_file: Callable[..., None] | None = None
         self.on_play_os: Callable[..., None] | None = None
+        self.on_stop: Callable[[], None] | None = None
         self.on_clients_changed: Callable[[int], None] | None = None
         self.on_connected: Callable[[], None] | None = None
         self.on_disconnected: Callable[[], None] | None = None
@@ -236,8 +237,9 @@ class Room:
 
     def _handle_message(self, msg: dict):
         cmd = msg.get('cmd')
-        host_send_time = msg.get('host_send_time')  # host's time.time() when sending; clients use for sync
+        host_send_time = msg.get('host_send_time')  # host's time.time() when sending (for reference)
         host_playing_label = str(msg.get('host_playing_label', ''))
+        client_recv_time = time.time()  # client uses this for sync so start is ~start_in_sec after receive
         if cmd == 'play_file' and self.on_play_file:
             try:
                 start_in = float(msg.get('start_in_sec', START_DELAY_SEC))
@@ -245,7 +247,7 @@ class Room:
                 midi_bytes = base64.b64decode(b64)
                 tempo = float(msg.get('tempo', 1.0))
                 transpose = int(msg.get('transpose', 0))
-                self.on_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label)
+                self.on_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time)
             except (TypeError, ValueError):
                 pass
         elif cmd == 'play_os' and self.on_play_os:
@@ -254,9 +256,11 @@ class Room:
                 sid = str(msg.get('sid', ''))
                 tempo = float(msg.get('tempo', 1.0))
                 transpose = int(msg.get('transpose', 0))
-                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label)
+                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time)
             except (TypeError, ValueError):
                 pass
+        elif cmd == 'stop' and self.on_stop:
+            self.on_stop()
         elif cmd == 'room_playing' and self.on_room_playing:
             try:
                 players = list(msg.get('players', []))
@@ -340,6 +344,24 @@ class Room:
             'transpose': transpose,
             'host_playing_label': host_playing_label,
         }
+        line = (json.dumps(payload) + '\n').encode('utf-8')
+        with self._lock:
+            dead = []
+            for c in self._clients:
+                try:
+                    c.sendall(line)
+                except OSError:
+                    dead.append(c)
+            for c in dead:
+                self._clients.remove(c)
+        if dead and self.on_clients_changed:
+            self.on_clients_changed(self.client_count())
+
+    def send_stop(self):
+        """Host only: broadcast stop to all clients so they stop playback too."""
+        if not self.is_host():
+            return
+        payload = {'cmd': 'stop'}
         line = (json.dumps(payload) + '\n').encode('utf-8')
         with self._lock:
             dead = []

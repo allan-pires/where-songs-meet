@@ -39,7 +39,8 @@ BTN_PAD_LARGE = (1, 0)  # less padding for large control buttons so they sit clo
 CTRL_BTN_WIDTH = 52
 CTRL_BTN_HEIGHT = 32
 CTRL_BTN_RADIUS = 8
-ICON_BTN_WIDTH = 3  # width in chars for icon-only buttons (uniform size)
+ICON_BTN_WIDTH = 4  # width in chars for icon-only buttons (enough so emoji isn't cut off at low res)
+ICON_BTN_PADX = (8, 8)  # extra horizontal padding for icon-only (text/emoji) so icon isn't clipped
 
 # Layout (compact enough that control row stays visible on lower-res / small screens)
 LISTBOX_MIN_ROWS = 5

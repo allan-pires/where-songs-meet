@@ -72,6 +72,7 @@ ICON_SEARCH = _t.ICON_SEARCH
 ICON_STOP = _t.ICON_STOP
 ICON_STOP_HOST = _t.ICON_STOP_HOST
 ICON_BTN_WIDTH = _t.ICON_BTN_WIDTH
+ICON_BTN_PADX = getattr(_t, 'ICON_BTN_PADX', (8, 8))
 ICON_UPDATE = _t.ICON_UPDATE
 ICON_LOG = _t.ICON_LOG
 LISTBOX_MIN_ROWS = _t.LISTBOX_MIN_ROWS
@@ -93,9 +94,9 @@ LABEL_FONT = _t.LABEL_FONT
 _CTRL_PLAY_SYMBOL = '\u25b6'   # ▶
 _CTRL_STOP_SYMBOL = '\u25a0'   # ■
 
-# Control button shape: less tall, rounded corners (used if Pillow available)
+# Control button shape: rounded corners (used if Pillow available); height allows glyph to clear at low res
 _CTRL_BTN_W = 56
-_CTRL_BTN_H = 22
+_CTRL_BTN_H = 30
 _CTRL_BTN_R = 6
 
 
@@ -142,7 +143,7 @@ class ControlButton(tk.Frame):
                 bg=init_bg,
                 activebackground=init_bg, activeforeground=fg,
                 highlightbackground=init_bg, highlightcolor=init_bg,
-                relief='flat', bd=0, highlightthickness=0, padx=0, pady=0,
+                relief='flat', bd=0, highlightthickness=0, padx=0, pady=2,
                 cursor='hand2', command=command, state=initial_state,
                 disabledforeground=FG_DISABLED, takefocus=0,
             )
@@ -335,6 +336,7 @@ class App:
                 base['font'] = ICON_FONT
                 base['width'] = ICON_BTN_WIDTH if not small else 2
                 base['height'] = 2 if not large else 2  # keep icon buttons same height when text fallback
+                base['padx'] = ICON_BTN_PADX  # avoid icon cut off on left/right at low res
             base.update(overrides)
             return base
 
@@ -1004,10 +1006,12 @@ class App:
         def on_disconnected():
             log.info("Room callback: disconnected")
             self.root.after(0, self._sync_update_disconnected_ui)
-        def on_play_file(start_in: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = ''):
-            self.root.after(0, lambda: self._sync_received_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label))
-        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = ''):
-            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label))
+        def on_play_file(start_in: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
+            self.root.after(0, lambda: self._sync_received_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time))
+        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
+            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time))
+        def on_stop():
+            self.root.after(0, self.stop)
         def on_room_playing(players: list):
             self.root.after(0, lambda: self._sync_update_now_playing(players))
         self._room.on_clients_changed = on_clients_changed
@@ -1015,6 +1019,7 @@ class App:
         self._room.on_disconnected = on_disconnected
         self._room.on_play_file = on_play_file
         self._room.on_play_os = on_play_os
+        self._room.on_stop = on_stop
         self._room.on_room_playing = on_room_playing
 
     def _open_log(self):
@@ -1342,7 +1347,7 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
         self.sync_host_btn.config(state='normal')
         self.sync_status.config(text='Disconnected.')
 
-    def _sync_received_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = ''):
+    def _sync_received_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
         """Client received play_file: play host's file or own selection at same time; report what we're playing."""
         log.info("Client received play_file (start_in=%.1fs, %s bytes)", start_in_sec, len(midi_bytes))
         if not playback.KEYBOARD_AVAILABLE:
@@ -1361,8 +1366,9 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             except OSError:
                 return
             my_label = host_playing_label.strip() or "host's selection"
-        if host_send_time is not None and isinstance(host_send_time, (int, float)):
-            start_at = float(host_send_time) + start_in_sec
+        # Schedule from receive time so we wait ~start_in_sec after getting the message (avoids clock skew)
+        if client_recv_time is not None and isinstance(client_recv_time, (int, float)):
+            start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
         self._sync_my_reported_label = my_label
@@ -1395,7 +1401,7 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             daemon=True
         ).start()
 
-    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = ''):
+    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
         """Client received play_os: play host's OS or own selection at same time; report what we're playing."""
         log.info("Client received play_os sid=%s (start_in=%.1fs)", sid, start_in_sec)
         if not playback.KEYBOARD_AVAILABLE:
@@ -1405,8 +1411,9 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
         if use_my and not my_sid:
             my_sid, my_title = self._last_os_sid, self._last_os_title
         use_my = use_my and bool(my_sid)
-        if host_send_time is not None and isinstance(host_send_time, (int, float)):
-            start_at = float(host_send_time) + start_in_sec
+        # Schedule from receive time so we wait ~start_in_sec after getting the message (avoids clock skew)
+        if client_recv_time is not None and isinstance(client_recv_time, (int, float)):
+            start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
         my_label = f"OS: {my_title}" if (use_my and my_title) else (f"OS: {my_sid}" if use_my else (host_playing_label.strip() or "host's selection"))
@@ -2041,6 +2048,8 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
     def stop(self):
         self._stopped_by_user = True
         self.playing = False
+        if self._room.is_host():
+            self._room.send_stop()
         self.status.config(text='Stopped')
         if self._current_source == 'playlist' and hasattr(self, 'pl_status'):
             self.pl_status.config(text='Stopped.')
