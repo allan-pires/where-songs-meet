@@ -107,5 +107,6 @@ Tests: `pytest tests/`
 ### Creating a release
 
 1. Bump `__version__` in `midi_to_macro/version.py`.
-2. Commit, then push a tag: `git tag v1.0.4 && git push origin v1.0.4`.
-3. GitHub Actions builds the Windows exe and creates a release with `where-songs-meet.exe` attached. “Download and run” in the app fetches the zip, extracts it, and runs the exe from the folder so it finds all DLLs (avoids “Failed to load Python DLL”).
+2. Ensure `origin` points to the repo in `version.py` (allan-pires/where-songs-meet) so the in-app updater and releases match: `git remote -v` → origin should be `https://github.com/allan-pires/where-songs-meet.git`.
+3. Commit, then push a tag: `git tag v1.0.4 && git push origin v1.0.4`.
+4. GitHub Actions on that repo builds the Windows exe and creates a release with `where-songs-meet.exe` attached. “Download and run” in the app fetches from the same repo.

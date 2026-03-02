@@ -94,9 +94,9 @@ LABEL_FONT = _t.LABEL_FONT
 _CTRL_PLAY_SYMBOL = '\u25b6'   # ▶
 _CTRL_STOP_SYMBOL = '\u25a0'   # ■
 
-# Control button shape: rounded corners (used if Pillow available); height allows glyph to clear at low res
+# Control button shape: frame tall enough for inner button + pady so bottom isn't clipped at low res
 _CTRL_BTN_W = 56
-_CTRL_BTN_H = 30
+_CTRL_BTN_H = 36
 _CTRL_BTN_R = 6
 
 
@@ -143,7 +143,7 @@ class ControlButton(tk.Frame):
                 bg=init_bg,
                 activebackground=init_bg, activeforeground=fg,
                 highlightbackground=init_bg, highlightcolor=init_bg,
-                relief='flat', bd=0, highlightthickness=0, padx=0, pady=2,
+                relief='flat', bd=0, highlightthickness=0, padx=0, pady=0,
                 cursor='hand2', command=command, state=initial_state,
                 disabledforeground=FG_DISABLED, takefocus=0,
             )
@@ -331,6 +331,9 @@ class App:
                 base['text'] = ''
                 base['width'] = size
                 base['height'] = size
+                # Padding so icon isn't clipped on low res / high DPI (left/right/bottom)
+                base['padx'] = 6
+                base['pady'] = 4
             else:
                 base['text'] = key_to_char.get(icon_key, '')
                 base['font'] = ICON_FONT
@@ -483,7 +486,7 @@ class App:
 
         # Actions
         actions = tk.Frame(file_tab, bg=CARD)
-        actions.pack(fill='x', padx=PAD, pady=(0, 2))
+        actions.pack(fill='x', padx=PAD, pady=(0, 6))
         self.play_btn = ControlButton(
             actions, kind='play', bg=PLAY_GREEN, hover_bg=PLAY_GREEN_HOVER, fg=BG,
             command=self.play, initial_state=tk.NORMAL
@@ -724,7 +727,7 @@ class App:
         # OS tab: actions (Play, Stop), progress bar (same style as File tab)
         self._os_last_midi_path: str | None = None
         os_actions = tk.Frame(os_tab, bg=CARD)
-        os_actions.pack(fill='x', padx=PAD, pady=(SMALL_PAD, 2))
+        os_actions.pack(fill='x', padx=PAD, pady=(SMALL_PAD, 6))
         self.os_play_btn = ControlButton(
             os_actions, kind='play', bg=PLAY_GREEN, hover_bg=PLAY_GREEN_HOVER, fg=BG,
             command=self._load_and_play_sequence, initial_state=tk.NORMAL
@@ -805,7 +808,7 @@ class App:
         pl_scroll.config(command=self.playlist_listbox.yview)
         # Play/Stop row at bottom of tab (like File and OS tabs)
         pl_actions = tk.Frame(playlist_tab, bg=CARD)
-        pl_actions.pack(fill='x', padx=PAD, pady=(SMALL_PAD, 2))
+        pl_actions.pack(fill='x', padx=PAD, pady=(SMALL_PAD, 6))
         pl_actions.columnconfigure(2, weight=1)
         self.pl_play_btn = ControlButton(
             pl_actions, kind='play', bg=PLAY_GREEN, hover_bg=PLAY_GREEN_HOVER, fg=BG,
@@ -1002,14 +1005,17 @@ class App:
             self.root.after(0, lambda: self._sync_update_host_status(n))
         def on_connected():
             log.info("Room callback: connected")
+            self._room.send_sync_request()  # request clock sync so play starts are aligned
             self.root.after(0, self._sync_update_joined_ui)
         def on_disconnected():
             log.info("Room callback: disconnected")
             self.root.after(0, self._sync_update_disconnected_ui)
-        def on_play_file(start_in: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
-            self.root.after(0, lambda: self._sync_received_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time))
-        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
-            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time))
+        def on_play_file(start_in: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
+            self.root.after(0, lambda: self._sync_received_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset))
+        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
+            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset))
+        def on_sync_ack(offset: float):
+            self.root.after(0, lambda: None)  # offset already stored in Room; optional UI feedback
         def on_stop():
             self.root.after(0, self.stop)
         def on_room_playing(players: list):
@@ -1019,6 +1025,7 @@ class App:
         self._room.on_disconnected = on_disconnected
         self._room.on_play_file = on_play_file
         self._room.on_play_os = on_play_os
+        self._room.on_sync_ack = on_sync_ack
         self._room.on_stop = on_stop
         self._room.on_room_playing = on_room_playing
 
@@ -1103,7 +1110,7 @@ class App:
 
             def download_and_run():
                 save_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-                path = download_update(download_url, save_dir=save_dir)
+                path, err = download_update(download_url, save_dir=save_dir)
                 if path:
                     try:
                         # Run from extracted folder (zip) or single exe; only replace-in-place for single exe when frozen
@@ -1143,7 +1150,9 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
                         messagebox.showinfo('Downloaded', f'Saved to: {path}')
                         top.destroy()
                 else:
-                    messagebox.showerror('Download failed', 'Could not download the update.')
+                    msg = err or 'Could not download the update.'
+                    log.warning("Update download failed: %s", msg)
+                    messagebox.showerror('Download failed', msg)
 
             tk.Button(btn_frame, text='Download and run', command=download_and_run, **btn_style).pack(side='left', padx=(0, BTN_GAP))
         tk.Button(btn_frame, text='Close', command=top.destroy, **btn_style).pack(side='left')
@@ -1347,7 +1356,7 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
         self.sync_host_btn.config(state='normal')
         self.sync_status.config(text='Disconnected.')
 
-    def _sync_received_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
+    def _sync_received_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
         """Client received play_file: play host's file or own selection at same time; report what we're playing."""
         log.info("Client received play_file (start_in=%.1fs, %s bytes)", start_in_sec, len(midi_bytes))
         if not playback.KEYBOARD_AVAILABLE:
@@ -1366,8 +1375,10 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             except OSError:
                 return
             my_label = host_playing_label.strip() or "host's selection"
-        # Schedule from receive time so we wait ~start_in_sec after getting the message (avoids clock skew)
-        if client_recv_time is not None and isinstance(client_recv_time, (int, float)):
+        # Use clock sync offset when available so we start at same moment as host; else fall back to receive-time delay
+        if sync_offset is not None and host_send_time is not None and isinstance(host_send_time, (int, float)):
+            start_at = (float(host_send_time) + start_in_sec) - sync_offset
+        elif client_recv_time is not None and isinstance(client_recv_time, (int, float)):
             start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
@@ -1401,7 +1412,7 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             daemon=True
         ).start()
 
-    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None):
+    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
         """Client received play_os: play host's OS or own selection at same time; report what we're playing."""
         log.info("Client received play_os sid=%s (start_in=%.1fs)", sid, start_in_sec)
         if not playback.KEYBOARD_AVAILABLE:
@@ -1411,8 +1422,10 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
         if use_my and not my_sid:
             my_sid, my_title = self._last_os_sid, self._last_os_title
         use_my = use_my and bool(my_sid)
-        # Schedule from receive time so we wait ~start_in_sec after getting the message (avoids clock skew)
-        if client_recv_time is not None and isinstance(client_recv_time, (int, float)):
+        # Use clock sync offset when available so we start at same moment as host; else fall back to receive-time delay
+        if sync_offset is not None and host_send_time is not None and isinstance(host_send_time, (int, float)):
+            start_at = (float(host_send_time) + start_in_sec) - sync_offset
+        elif client_recv_time is not None and isinstance(client_recv_time, (int, float)):
             start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
@@ -1619,9 +1632,9 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             title = next((t for s, t in self.os_sequences if s == sid), None)
             host_label = f"OS: {title}" if title else f"OS: {sid}"
             log.info("Host sending play_os sid=%s (synced)", sid)
-            self._room.send_play_os(START_DELAY_SEC, sid, tempo, transpose, host_playing_label=host_label)
+            host_send_time = self._room.send_play_os(START_DELAY_SEC, sid, tempo, transpose, host_playing_label=host_label)
             self._room.host_report_playing(host_label)
-            start_at = time.time() + START_DELAY_SEC
+            start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
             def wait_then_play():
                 delay = start_at - time.time()
                 if delay > 0:
@@ -1990,9 +2003,9 @@ start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
             transpose = self.transpose.get()
             host_label = os.path.basename(path)
             log.info("Host sending play_file (synced, %s bytes)", len(midi_bytes))
-            self._room.send_play_file(START_DELAY_SEC, midi_bytes, tempo, transpose, host_playing_label=host_label)
+            host_send_time = self._room.send_play_file(START_DELAY_SEC, midi_bytes, tempo, transpose, host_playing_label=host_label)
             self._room.host_report_playing(host_label)
-            start_at = time.time() + START_DELAY_SEC
+            start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
             def wait_then_play():
                 delay = start_at - time.time()
                 if delay > 0:

@@ -45,6 +45,7 @@ class Room:
         self.on_play_file: Callable[..., None] | None = None
         self.on_play_os: Callable[..., None] | None = None
         self.on_stop: Callable[[], None] | None = None
+        self.on_sync_ack: Callable[[float], None] | None = None  # client: clock offset (host_time - client_time)
         self.on_clients_changed: Callable[[int], None] | None = None
         self.on_connected: Callable[[], None] | None = None
         self.on_disconnected: Callable[[], None] | None = None
@@ -52,6 +53,8 @@ class Room:
 
         self._host_playing_label = ""
         self._client_labels: dict[int, str] = {}  # id(client) -> label
+        self._client_sync_offset: float | None = None  # client: host_time - client_time, set when sync_ack received
+        self._sync_sent_at: float | None = None  # client: time.time() when we sent sync_req
 
     def is_host(self) -> bool:
         return self._host_socket is not None
@@ -123,6 +126,14 @@ class Room:
                             label = str(msg.get('label', ''))[:200]
                             self._client_labels[id(client)] = label
                             self._broadcast_room_playing()
+                        elif msg.get('cmd') == 'sync_req':
+                            t_client = msg.get('t_client')
+                            t_host = time.time()
+                            reply = json.dumps({'cmd': 'sync_ack', 't_host': t_host, 't_client': t_client}) + '\n'
+                            try:
+                                client.sendall(reply.encode('utf-8'))
+                            except OSError:
+                                pass
                     except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
                         pass
         except (OSError, ConnectionResetError) as e:
@@ -239,15 +250,28 @@ class Room:
         cmd = msg.get('cmd')
         host_send_time = msg.get('host_send_time')  # host's time.time() when sending (for reference)
         host_playing_label = str(msg.get('host_playing_label', ''))
-        client_recv_time = time.time()  # client uses this for sync so start is ~start_in_sec after receive
-        if cmd == 'play_file' and self.on_play_file:
+        client_recv_time = time.time()  # used when no sync offset available
+        if cmd == 'sync_ack' and self.on_sync_ack:
+            try:
+                t_host = float(msg.get('t_host', 0))
+                t_client_sent = msg.get('t_client')
+                if t_client_sent is not None and self._sync_sent_at is not None:
+                    t_c2 = time.time()
+                    # offset = host_time - client_time so client_time + offset = host_time
+                    offset = t_host - (self._sync_sent_at + t_c2) / 2.0
+                    self._client_sync_offset = offset
+                    log.debug("Sync offset: %.3f ms", offset * 1000)
+                    self.on_sync_ack(offset)
+            except (TypeError, ValueError):
+                pass
+        elif cmd == 'play_file' and self.on_play_file:
             try:
                 start_in = float(msg.get('start_in_sec', START_DELAY_SEC))
                 b64 = msg.get('midi_base64', '')
                 midi_bytes = base64.b64decode(b64)
                 tempo = float(msg.get('tempo', 1.0))
                 transpose = int(msg.get('transpose', 0))
-                self.on_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time)
+                self.on_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time, self._client_sync_offset)
             except (TypeError, ValueError):
                 pass
         elif cmd == 'play_os' and self.on_play_os:
@@ -256,7 +280,7 @@ class Room:
                 sid = str(msg.get('sid', ''))
                 tempo = float(msg.get('tempo', 1.0))
                 transpose = int(msg.get('transpose', 0))
-                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time)
+                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, self._client_sync_offset)
             except (TypeError, ValueError):
                 pass
         elif cmd == 'stop' and self.on_stop:
@@ -272,6 +296,8 @@ class Room:
         """Leave the room (client only). Wakes the recv thread and updates UI."""
         log.info("Client disconnecting")
         self._running = False
+        self._client_sync_offset = None
+        self._sync_sent_at = None
         if self._client_socket:
             try:
                 self._client_socket.shutdown(socket.SHUT_RDWR)
@@ -284,6 +310,18 @@ class Room:
             self._client_socket = None
         if self.on_disconnected:
             self.on_disconnected()
+
+    def send_sync_request(self):
+        """Client only: send clock sync request so host can reply with sync_ack; we then compute offset for aligned start."""
+        if not self.is_client() or not self._client_socket:
+            return
+        self._sync_sent_at = time.time()
+        payload = {'cmd': 'sync_req', 't_client': self._sync_sent_at}
+        line = (json.dumps(payload) + '\n').encode('utf-8')
+        try:
+            self._client_socket.sendall(line)
+        except OSError:
+            pass
 
     def send_report_playing(self, label: str):
         """Client only: tell host what we're playing (for room_playing display)."""
@@ -304,9 +342,9 @@ class Room:
         self._broadcast_room_playing()
 
     def send_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_playing_label: str = ''):
-        """Host only: broadcast play file to all clients."""
+        """Host only: broadcast play file to all clients. Returns host_send_time used (for host to align its own start)."""
         if not self.is_host():
-            return
+            return None
         host_send_time = time.time()
         payload = {
             'cmd': 'play_file',
@@ -329,11 +367,12 @@ class Room:
                 self._clients.remove(c)
         if dead and self.on_clients_changed:
             self.on_clients_changed(self.client_count())
+        return host_send_time
 
     def send_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_playing_label: str = ''):
-        """Host only: broadcast play OS sequence to all clients."""
+        """Host only: broadcast play OS sequence to all clients. Returns host_send_time used (for host to align its own start)."""
         if not self.is_host():
-            return
+            return None
         host_send_time = time.time()
         payload = {
             'cmd': 'play_os',
@@ -356,6 +395,7 @@ class Room:
                 self._clients.remove(c)
         if dead and self.on_clients_changed:
             self.on_clients_changed(self.client_count())
+        return host_send_time
 
     def send_stop(self):
         """Host only: broadcast stop to all clients so they stop playback too."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import ssl
@@ -11,6 +12,8 @@ import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
+
+log = logging.getLogger("midi_to_macro.updater")
 
 from midi_to_macro.version import (
     GITHUB_RELEASES_API,
@@ -139,26 +142,42 @@ def download_update(
     download_url: str,
     timeout: float = 60.0,
     save_dir: str | None = None,
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """
-    Download the update. Returns the path to run (exe or folder exe), or None on failure.
+    Download the update. Returns (path, error_message). On success path is set and error_message is None.
+    On failure path is None and error_message describes the error (and is logged).
     - If URL is .zip and save_dir is set: download zip, extract to save_dir/where-songs-meet/,
       return path to save_dir/where-songs-meet/where-songs-meet.exe (runs with DLLs beside it, no "Failed to load Python DLL").
     - If URL is .exe and save_dir is set: save exe there, return its path.
     - If save_dir is None: save to temp and return path (caller runs or cleans up).
     """
     if not download_url:
-        return None
+        msg = "No download URL provided"
+        log.warning("download_update: %s", msg)
+        return (None, msg)
 
     opener = _build_download_opener()
     req = urllib.request.Request(download_url, headers=_DOWNLOAD_HEADERS)
     try:
         with opener.open(req, timeout=timeout) as resp:
             data = resp.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
-        return None
+    except urllib.error.HTTPError as e:
+        msg = f"HTTP {e.code}: {e.reason}"
+        log.warning("download_update: %s", msg, exc_info=True)
+        return (None, msg)
+    except urllib.error.URLError as e:
+        msg = str(e.reason) if e.reason else "Connection error"
+        log.warning("download_update: %s", msg, exc_info=True)
+        return (None, msg)
+    except (OSError, ValueError) as e:
+        msg = str(e)
+        log.warning("download_update: %s", msg, exc_info=True)
+        return (None, msg)
+
     if not data:
-        return None
+        msg = "Download returned no data"
+        log.warning("download_update: %s", msg)
+        return (None, msg)
 
     filename = download_url.split("/")[-1].split("?")[0] or "update"
 
@@ -177,9 +196,15 @@ def download_update(
                 os.remove(zip_path)
             except OSError:
                 pass
-            return exe_path if os.path.isfile(exe_path) else None
-        except (OSError, zipfile.BadZipFile):
-            return None
+            if os.path.isfile(exe_path):
+                return (exe_path, None)
+            msg = "Extracted zip did not contain where-songs-meet.exe"
+            log.warning("download_update: %s", msg)
+            return (None, msg)
+        except (OSError, zipfile.BadZipFile) as e:
+            msg = str(e)
+            log.warning("download_update: extract failed: %s", msg, exc_info=True)
+            return (None, msg)
 
     if not filename.endswith(".exe") and not filename.endswith(".msi"):
         filename = filename + ".exe"
@@ -190,14 +215,18 @@ def download_update(
         try:
             with open(path, "wb") as f:
                 f.write(data)
-            return path
-        except OSError:
-            return None
+            return (path, None)
+        except OSError as e:
+            msg = str(e)
+            log.warning("download_update: save failed: %s", msg, exc_info=True)
+            return (None, msg)
 
     fd, path = tempfile.mkstemp(suffix="_" + filename)
     try:
         with open(fd, "wb") as f:
             f.write(data)
-        return path
-    except OSError:
-        return None
+        return (path, None)
+    except OSError as e:
+        msg = str(e)
+        log.warning("download_update: temp write failed: %s", msg, exc_info=True)
+        return (None, msg)
