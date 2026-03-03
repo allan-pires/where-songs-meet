@@ -29,7 +29,7 @@ from midi_to_macro.sync import DEFAULT_PORT, Room, START_DELAY_SEC, get_lan_ip
 from midi_to_macro.firewall import add_firewall_rules
 from midi_to_macro.updater import check_for_updates, download_update, is_newer, open_release_page
 from midi_to_macro.version import __version__ as APP_VERSION
-from midi_to_macro.window_focus import focus_process_window
+from midi_to_macro.window_focus import focus_process_window, get_foreground_process_name
 from midi_to_macro import log_config as _log_config
 from midi_to_macro import theme as _theme
 
@@ -271,6 +271,7 @@ class App:
         self._sync_my_reported_label = ''  # label we sent via report_playing (client)
         self._sync_last_players: list = []  # last room_playing list (for client UI refresh)
         self._sync_last_participant_count: int = -1  # host: previous client count (for "someone joined" feedback)
+        self._focus_check_after_id: str | None = None  # stop playback when foreground window is not the game
         # Last selection per tab (so Play together shows it even after switching tabs)
         self._last_file_path: str | None = None
         self._last_os_sid: str | None = None
@@ -536,7 +537,7 @@ class App:
         _tooltip(add_to_playlist_file_btn, self.status, 'Add to playlist')
         _tooltip(save_file_cb, self.status, 'Save tempo/transpose for this song')
         _tooltip(self.play_btn, self.status, 'Play')
-        _tooltip(self.stop_btn, self.status, 'Stop')
+        _tooltip(self.stop_btn, self.status, 'Stop (Escape from any window)')
 
         # ---- Tab 2: Online Sequencer ----
         os_tab = tk.Frame(self.notebook, bg=CARD)
@@ -746,7 +747,7 @@ class App:
         self.os_stop_btn.grid(row=0, column=1, padx=(0, CTRL_BTN_GAP))
         os_actions.columnconfigure(2, weight=1)
         _tooltip(self.os_play_btn, self.os_status, 'Play')
-        _tooltip(self.os_stop_btn, self.os_status, 'Stop')
+        _tooltip(self.os_stop_btn, self.os_status, 'Stop (Escape from any window)')
         repeat_os_btn = tk.Checkbutton(
             os_actions, text='Repeat', variable=self.repeat_os,
             font=LABEL_FONT, fg=FG, bg=CARD,
@@ -853,7 +854,7 @@ class App:
         _tooltip(pl_remove_btn, self.pl_status, 'Remove selected')
         _tooltip(pl_clear_btn, self.pl_status, 'Clear playlist')
         _tooltip(self.pl_play_btn, self.pl_status, 'Play playlist')
-        _tooltip(self.pl_stop_btn, self.pl_status, 'Stop')
+        _tooltip(self.pl_stop_btn, self.pl_status, 'Stop (Escape from any window)')
         _tooltip(repeat_pl_btn, self.pl_status, 'When finished, play playlist again from the beginning')
 
         # ---- Tab 4: Play together ----
@@ -1004,6 +1005,7 @@ class App:
         )
         self.sync_play_my_cb.pack(anchor='w')
         # Per-machine timing offset: adjust when this device actually starts (ms, negative = earlier, positive = later)
+        self._sync_offset_max_ms = 1000
         self.sync_offset_ms = tk.IntVar(value=0)
         offset_row = tk.Frame(sync_options, bg=BG)
         offset_row.pack(fill='x', pady=(SMALL_PAD, 0))
@@ -1012,12 +1014,37 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=BG
         ).pack(side='left')
         self.sync_offset_scale = tk.Scale(
-            offset_row, from_=-2000, to=2000, orient='horizontal',
-            variable=self.sync_offset_ms, resolution=50, length=240,
-            showvalue=True, bg=BG, fg=FG, troughcolor=CARD,
+            offset_row, from_=-self._sync_offset_max_ms, to=self._sync_offset_max_ms, orient='horizontal',
+            variable=self.sync_offset_ms, resolution=25, length=200,
+            showvalue=False, bg=BG, fg=FG, troughcolor=CARD,
             highlightthickness=0, bd=0
         )
         self.sync_offset_scale.pack(side='left', padx=(SMALL_PAD, 0))
+        self._sync_offset_entry = tk.Entry(
+            offset_row, width=5, font=SMALL_FONT, bg=ENTRY_BG, fg=ENTRY_FG,
+            justify='right', relief='flat', highlightthickness=0
+        )
+        self._sync_offset_entry.insert(0, '0')
+        self._sync_offset_entry.pack(side='left', padx=(SMALL_PAD, 0))
+        def _sync_offset_scale_changed(*_):
+            try:
+                self._sync_offset_entry.delete(0, tk.END)
+                self._sync_offset_entry.insert(0, str(self.sync_offset_ms.get()))
+            except tk.TclError:
+                pass
+        def _sync_offset_entry_apply(*_):
+            try:
+                s = self._sync_offset_entry.get().strip()
+                v = int(s) if s else 0
+                v = max(-self._sync_offset_max_ms, min(self._sync_offset_max_ms, v))
+                self.sync_offset_ms.set(v)
+                self._sync_offset_entry.delete(0, tk.END)
+                self._sync_offset_entry.insert(0, str(v))
+            except ValueError:
+                _sync_offset_scale_changed()
+        self.sync_offset_ms.trace_add('write', _sync_offset_scale_changed)
+        self._sync_offset_entry.bind('<Return>', _sync_offset_entry_apply)
+        self._sync_offset_entry.bind('<FocusOut>', _sync_offset_entry_apply)
         # Your current selection (always visible, updated when you change file/OS)
         self.sync_your_selection_label = tk.Label(
             sync_frame, text='Your selection: (none)', font=SMALL_FONT, fg=SUBTLE, bg=BG,
@@ -1039,6 +1066,7 @@ class App:
                 pass
         self.notebook.bind('<<NotebookTabChanged>>', _on_notebook_tab_changed)
         self._sync_register_room_callbacks()
+        self._start_stop_hotkey_listener()
 
     def _sync_register_room_callbacks(self):
         """Register room callbacks; all run via root.after on main thread."""
@@ -1075,6 +1103,26 @@ class App:
         self._room.on_pong = on_pong
         self._room.on_stop = on_stop
         self._room.on_room_playing = on_room_playing
+
+    def _start_stop_hotkey_listener(self):
+        """Start a global keyboard listener: Escape stops playback from any window."""
+        if not playback.KEYBOARD_AVAILABLE:
+            return
+        try:
+            from pynput.keyboard import Listener as KListener, Key as KKey
+        except ImportError:
+            return
+
+        def on_press(key):
+            try:
+                if key == KKey.esc:
+                    self.root.after(0, self.stop)
+            except (tk.TclError, RuntimeError):
+                pass
+
+        listener = KListener(on_press=on_press)
+        listener.start()
+        self._stop_hotkey_listener = listener
 
     def _open_log(self):
         """Open the log file with the default system application."""
@@ -1461,6 +1509,8 @@ del "%ME%"
         use_my = self._room.is_client() and self.sync_play_my_selection.get() and path
         if use_my:
             my_label = os.path.basename(path)
+            # Use client's own tempo and transposition when playing their selection
+            tempo, transpose = self.tempo.get(), self.transpose.get()
         else:
             try:
                 f = tempfile.NamedTemporaryFile(suffix='.mid', delete=False)
@@ -1509,6 +1559,7 @@ del "%ME%"
             args=(path, tempo, transpose),
             daemon=True
         ).start()
+        self._start_focus_check()
 
     def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
         """Client received play_os: play host's OS or own selection at same time; report what we're playing."""
@@ -1520,6 +1571,9 @@ del "%ME%"
         if use_my and not my_sid:
             my_sid, my_title = self._last_os_sid, self._last_os_title
         use_my = use_my and bool(my_sid)
+        if use_my:
+            # Use client's own tempo and transposition when playing their selection
+            tempo, transpose = self.tempo.get(), self.transpose.get()
         # Use clock sync offset when available so we start at same moment as host; else fall back to receive-time delay
         if sync_offset is not None and host_send_time is not None and isinstance(host_send_time, (int, float)):
             start_at = (float(host_send_time) + start_in_sec) - sync_offset
@@ -1573,6 +1627,7 @@ del "%ME%"
             args=(path, tempo, transpose),
             daemon=True
         ).start()
+        self._start_focus_check()
 
     def _load_sequences(self):
         label = (self.os_sort_menu.get() or 'Newest').strip()
@@ -1769,6 +1824,7 @@ del "%ME%"
             args=(path, tempo_multiplier, transpose),
             daemon=True
         ).start()
+        self._start_focus_check()
 
     def _download_os_midi(self):
         """Download selected sequence as MIDI and save to a file chosen by the user."""
@@ -1956,6 +2012,7 @@ del "%ME%"
             args=(path, self.tempo.get(), self.transpose.get()),
             daemon=True
         ).start()
+        self._start_focus_check()
 
     def _start_next_playlist_item(self):
         """Start playback of the current playlist item (main thread). Advances to next when finished via _on_playback_finished."""
@@ -2145,6 +2202,7 @@ del "%ME%"
             self.pl_progress_bar['value'] = self.pl_progress_bar['maximum']
         # Only switch to "stopped" state if we're not playing (e.g. we didn't just start a repeat)
         if not self.playing:
+            self._cancel_focus_check()
             if getattr(self, '_os_playing_path', None):
                 self._os_playing_path = None
             self.play_btn.config(state='normal')
@@ -2162,9 +2220,39 @@ del "%ME%"
             if self._current_source == 'sync' and hasattr(self, 'sync_status'):
                 self.sync_status.config(text='Finished. Waiting for host to play.' if self._room.is_client() else 'You are the host. Select music and press Play — others will follow.')
 
+    def _cancel_focus_check(self):
+        """Cancel the periodic check that stops playback when the game loses focus."""
+        if self._focus_check_after_id is not None:
+            try:
+                self.root.after_cancel(self._focus_check_after_id)
+            except (tk.TclError, ValueError):
+                pass
+            self._focus_check_after_id = None
+
+    def _check_game_focus(self):
+        """If we're playing and the foreground window is not the game (or our app), stop playback."""
+        self._focus_check_after_id = None
+        if not self.playing:
+            return
+        name = get_foreground_process_name()
+        if name is None:
+            self._focus_check_after_id = self.root.after(500, self._check_game_focus)
+            return
+        our_exe = os.path.basename(sys.executable).lower()
+        if name in ('wwm.exe', our_exe):
+            self._focus_check_after_id = self.root.after(500, self._check_game_focus)
+            return
+        self.stop()
+
+    def _start_focus_check(self):
+        """Start periodic check: stop playback when foreground window is not Where Winds Meet or this app."""
+        self._cancel_focus_check()
+        self._focus_check_after_id = self.root.after(500, self._check_game_focus)
+
     def stop(self):
         self._stopped_by_user = True
         self.playing = False
+        self._cancel_focus_check()
         if self._room.is_host():
             self._room.send_stop()
         self.status.config(text='Stopped')
