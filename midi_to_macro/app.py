@@ -1117,15 +1117,17 @@ class App:
                         from_zip = os.path.basename(os.path.dirname(path)) == "where-songs-meet"
                         if os.name == "nt" and getattr(sys, "frozen", False) and not from_zip:
                             current_exe = sys.executable
+                            exe_dir = os.path.dirname(current_exe)
                             def q(s: str) -> str:
                                 return s.replace('"', '""')
+                            # Run the downloaded exe; use start /wait so the batch waits for it to exit, then copy and delete (one exe left).
                             batch = f'''@echo off
 set "ME=%~f0"
-timeout /t 2 /nobreak >nul
+timeout /t 4 /nobreak >nul
+start "" /wait /D "{q(exe_dir)}" "{q(path)}"
 copy /Y "{q(path)}" "{q(current_exe)}"
-start "" "{q(current_exe)}"
 del "{q(path)}"
-start /b "" cmd /c "timeout /t 1 >nul & del \"%ME%\""
+del "%ME%"
 '''
                             fd, batch_path = tempfile.mkstemp(suffix='.bat', text=True)
                             try:

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import ssl
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -212,6 +213,15 @@ def download_update(
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         path = os.path.join(save_dir, filename)
+        # Avoid overwriting the running executable (Windows locks it and the write would fail)
+        if getattr(sys, "frozen", False):
+            try:
+                if os.path.abspath(path) == os.path.abspath(sys.executable):
+                    base, ext = os.path.splitext(filename)
+                    filename = base + "-new" + ext
+                    path = os.path.join(save_dir, filename)
+            except OSError:
+                pass
         try:
             with open(path, "wb") as f:
                 f.write(data)
