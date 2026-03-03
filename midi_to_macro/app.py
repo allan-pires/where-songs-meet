@@ -94,9 +94,9 @@ LABEL_FONT = _t.LABEL_FONT
 _CTRL_PLAY_SYMBOL = '\u25b6'   # ▶
 _CTRL_STOP_SYMBOL = '\u25a0'   # ■
 
-# Control button shape: frame tall enough for inner button + pady so bottom isn't clipped at low res
+# Control button shape: enough height for 1080p so play/stop glyph isn't clipped
 _CTRL_BTN_W = 56
-_CTRL_BTN_H = 36
+_CTRL_BTN_H = 40
 _CTRL_BTN_R = 6
 
 
@@ -332,20 +332,20 @@ class App:
                 base['text'] = ''
                 base['width'] = size
                 base['height'] = size
-                # Padding so icon isn't clipped on low res / high DPI (left/right/bottom)
-                base['padx'] = 6
-                base['pady'] = 4
+                # Generous padding so icon isn't clipped at 1080p (vs 4K)
+                base['padx'] = 10
+                base['pady'] = 6
             else:
                 base['text'] = key_to_char.get(icon_key, '')
                 base['font'] = ICON_FONT
                 base['width'] = ICON_BTN_WIDTH if not small else 2
                 base['height'] = 2 if not large else 2  # keep icon buttons same height when text fallback
                 base['padx'] = ICON_BTN_PADX  # avoid icon cut off on left/right at low res
-                # CONNECT (Join) and LOG emojis can be wider; match image-path padding + extra width so they don't clip (like UPDATE/HOST)
+                # CONNECT (Join) and LOG need extra room at 1080p so they don't clip
                 if icon_key in ('CONNECT', 'LOG'):
-                    base['padx'] = 6
-                    base['pady'] = 4
-                    base['width'] = 6
+                    base['padx'] = 10
+                    base['pady'] = 6
+                    base['width'] = 8
             base.update(overrides)
             return base
 
@@ -967,24 +967,31 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.sync_status.pack(side='left', padx=(PAD, 0))
-        self.sync_test_latency_btn = tk.Button(
-            join_btns, text='Test latency', command=self._sync_test_latency,
-            font=SMALL_FONT, fg=FG, bg=CARD, activebackground=CARD, activeforeground=FG,
-            relief='flat', cursor='hand2'
-        )
-        self.sync_test_latency_btn.pack_forget()  # shown when client connected
-        self.sync_test_latency_btn.bind('<Enter>', lambda e: self.sync_test_latency_btn.configure(bg=ACCENT))
-        self.sync_test_latency_btn.bind('<Leave>', lambda e: self.sync_test_latency_btn.configure(bg=CARD))
-        self.sync_latency_label = tk.Label(
-            join_btns, text='', font=SMALL_FONT, fg=ACCENT, bg=CARD
-        )
-        self.sync_latency_label.pack(side='left', padx=(BTN_GAP, 0))
-        _tooltip(self.sync_latency_label, self.sync_status, 'Round-trip time to host. Higher latency may need a longer countdown before play.')
         _tooltip(self.sync_host_btn, sync_host_tooltip, 'Start hosting')
         _tooltip(self.sync_stop_host_btn, sync_host_tooltip, 'Stop hosting')
         _tooltip(self.sync_join_btn, self.sync_status, 'Connect')
         _tooltip(self.sync_disconnect_btn, self.sync_status, 'Disconnect')
-        _tooltip(self.sync_test_latency_btn, self.sync_status, 'Measure round-trip time to host')
+        # Latency test on its own row (avoids hover tooltip fighting with status text)
+        self.sync_latency_row = tk.Frame(join_inner, bg=CARD)
+        self.sync_test_latency_btn = tk.Button(
+            self.sync_latency_row, text='Test latency', command=self._sync_test_latency,
+            font=SMALL_FONT, fg=FG, bg=CARD, activebackground=CARD, activeforeground=FG,
+            relief='flat', cursor='hand2'
+        )
+        self.sync_test_latency_btn.pack(side='left', padx=(0, BTN_GAP))
+        self.sync_test_latency_btn.bind('<Enter>', lambda e: self.sync_test_latency_btn.configure(bg=ACCENT))
+        self.sync_test_latency_btn.bind('<Leave>', lambda e: self.sync_test_latency_btn.configure(bg=CARD))
+        self.sync_latency_label = tk.Label(
+            self.sync_latency_row, text='', font=SMALL_FONT, fg=ACCENT, bg=CARD
+        )
+        self.sync_latency_label.pack(side='left', padx=(0, BTN_GAP))
+        self.sync_latency_hint = tk.Label(
+            self.sync_latency_row, text='', font=SMALL_FONT, fg=SUBTLE, bg=CARD
+        )
+        self.sync_latency_hint.pack(side='left')
+        _tooltip(self.sync_test_latency_btn, self.sync_latency_hint, 'Measure round-trip time to host.')
+        _tooltip(self.sync_latency_label, self.sync_latency_hint, 'Round-trip time to host. Higher latency may need a longer countdown before play.')
+        self.sync_latency_row.pack_forget()  # show only when client connected
         # Client option: play own selection at same time as host
         self.sync_play_my_selection = tk.BooleanVar(value=False)
         sync_options = tk.Frame(sync_frame, bg=BG)
@@ -996,6 +1003,21 @@ class App:
             command=self._sync_report_selection
         )
         self.sync_play_my_cb.pack(anchor='w')
+        # Per-machine timing offset: adjust when this device actually starts (ms, negative = earlier, positive = later)
+        self.sync_offset_ms = tk.IntVar(value=0)
+        offset_row = tk.Frame(sync_options, bg=BG)
+        offset_row.pack(fill='x', pady=(SMALL_PAD, 0))
+        tk.Label(
+            offset_row, text='Adjust my timing (ms):',
+            font=SMALL_FONT, fg=SUBTLE, bg=BG
+        ).pack(side='left')
+        self.sync_offset_scale = tk.Scale(
+            offset_row, from_=-2000, to=2000, orient='horizontal',
+            variable=self.sync_offset_ms, resolution=50, length=240,
+            showvalue=True, bg=BG, fg=FG, troughcolor=CARD,
+            highlightthickness=0, bd=0
+        )
+        self.sync_offset_scale.pack(side='left', padx=(SMALL_PAD, 0))
         # Your current selection (always visible, updated when you change file/OS)
         self.sync_your_selection_label = tk.Label(
             sync_frame, text='Your selection: (none)', font=SMALL_FONT, fg=SUBTLE, bg=BG,
@@ -1025,7 +1047,9 @@ class App:
             self.root.after(0, lambda: self._sync_update_host_status(n))
         def on_connected():
             log.info("Room callback: connected")
-            self._room.send_sync_request()  # request clock sync so play starts are aligned
+            # Request multiple sync samples so clock offset is more stable before first Play
+            for i in range(5):
+                self.root.after(i * 150, self._room.send_sync_request)
             self.root.after(0, self._sync_update_joined_ui)
         def on_disconnected():
             log.info("Room callback: disconnected")
@@ -1314,8 +1338,8 @@ del "%ME%"
         self._sync_play_join_sound()
         if hasattr(self, 'sync_latency_label'):
             self.sync_latency_label.config(text='')
-        if hasattr(self, 'sync_test_latency_btn'):
-            self.sync_test_latency_btn.pack(side='left', padx=(0, BTN_GAP))
+        if hasattr(self, 'sync_latency_row'):
+            self.sync_latency_row.pack(fill='x', pady=(SMALL_PAD, 0))
         self._sync_report_selection()  # report our selection so host sees us (or "(host's selection)")
 
     def _sync_test_latency(self):
@@ -1338,8 +1362,8 @@ del "%ME%"
         self.sync_host_btn.config(state='normal')
         self.sync_status.config(text='Disconnected.')
         self._sync_my_reported_label = ''
-        if hasattr(self, 'sync_test_latency_btn'):
-            self.sync_test_latency_btn.pack_forget()
+        if hasattr(self, 'sync_latency_row'):
+            self.sync_latency_row.pack_forget()
         if hasattr(self, 'sync_latency_label'):
             self.sync_latency_label.config(text='')
         self._sync_update_now_playing([])
@@ -1421,6 +1445,13 @@ del "%ME%"
         self.sync_host_btn.config(state='normal')
         self.sync_status.config(text='Disconnected.')
 
+    def _sync_local_offset_sec(self) -> float:
+        """Return local timing adjustment in seconds (slider)."""
+        try:
+            return (self.sync_offset_ms.get() or 0) / 1000.0
+        except Exception:
+            return 0.0
+
     def _sync_received_play_file(self, start_in_sec: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
         """Client received play_file: play host's file or own selection at same time; report what we're playing."""
         log.info("Client received play_file (start_in=%.1fs, %s bytes)", start_in_sec, len(midi_bytes))
@@ -1447,6 +1478,8 @@ del "%ME%"
             start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
+        # Apply local per-machine timing adjustment (slider) so user can fine-tune their start
+        start_at += self._sync_local_offset_sec()
         self._sync_my_reported_label = my_label
         self._room.send_report_playing(my_label)
 
@@ -1494,6 +1527,8 @@ del "%ME%"
             start_at = float(client_recv_time) + start_in_sec
         else:
             start_at = time.time() + start_in_sec
+        # Apply local per-machine timing adjustment (slider) so user can fine-tune their start
+        start_at += self._sync_local_offset_sec()
         my_label = f"OS: {my_title}" if (use_my and my_title) else (f"OS: {my_sid}" if use_my else (host_playing_label.strip() or "host's selection"))
         self._sync_my_reported_label = my_label
         self._room.send_report_playing(my_label)
@@ -1700,6 +1735,8 @@ del "%ME%"
             host_send_time = self._room.send_play_os(START_DELAY_SEC, sid, tempo, transpose, host_playing_label=host_label)
             self._room.host_report_playing(host_label)
             start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
+            # Apply local timing adjustment so host can nudge their own start earlier/later if needed
+            start_at += self._sync_local_offset_sec()
             def wait_then_play():
                 delay = start_at - time.time()
                 if delay > 0:
@@ -2071,6 +2108,8 @@ del "%ME%"
             host_send_time = self._room.send_play_file(START_DELAY_SEC, midi_bytes, tempo, transpose, host_playing_label=host_label)
             self._room.host_report_playing(host_label)
             start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
+            # Apply local timing adjustment so host can nudge their own start earlier/later if needed
+            start_at += self._sync_local_offset_sec()
             def wait_then_play():
                 delay = start_at - time.time()
                 if delay > 0:

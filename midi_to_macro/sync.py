@@ -267,9 +267,13 @@ class Room:
                     t_c2 = time.time()
                     # offset = host_time - client_time so client_time + offset = host_time
                     offset = t_host - (self._sync_sent_at + t_c2) / 2.0
-                    self._client_sync_offset = offset
-                    log.debug("Sync offset: %.3f ms", offset * 1000)
-                    self.on_sync_ack(offset)
+                    # Smooth over multiple samples so a single noisy RTT doesn't skew us
+                    if self._client_sync_offset is None:
+                        self._client_sync_offset = offset
+                    else:
+                        self._client_sync_offset = (self._client_sync_offset + offset) / 2.0
+                    log.debug("Sync offset updated: %.3f ms", self._client_sync_offset * 1000)
+                    self.on_sync_ack(self._client_sync_offset)
             except (TypeError, ValueError):
                 pass
         elif cmd == 'play_file' and self.on_play_file:
