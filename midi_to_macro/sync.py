@@ -46,6 +46,7 @@ class Room:
         self.on_play_os: Callable[..., None] | None = None
         self.on_stop: Callable[[], None] | None = None
         self.on_sync_ack: Callable[[float], None] | None = None  # client: clock offset (host_time - client_time)
+        self.on_pong: Callable[[float], None] | None = None  # client: RTT in seconds (after send_ping)
         self.on_clients_changed: Callable[[int], None] | None = None
         self.on_connected: Callable[[], None] | None = None
         self.on_disconnected: Callable[[], None] | None = None
@@ -55,6 +56,7 @@ class Room:
         self._client_labels: dict[int, str] = {}  # id(client) -> label
         self._client_sync_offset: float | None = None  # client: host_time - client_time, set when sync_ack received
         self._sync_sent_at: float | None = None  # client: time.time() when we sent sync_req
+        self._ping_sent_at: float | None = None  # client: time.time() when we sent ping (for RTT)
 
     def is_host(self) -> bool:
         return self._host_socket is not None
@@ -130,6 +132,12 @@ class Room:
                             t_client = msg.get('t_client')
                             t_host = time.time()
                             reply = json.dumps({'cmd': 'sync_ack', 't_host': t_host, 't_client': t_client}) + '\n'
+                            try:
+                                client.sendall(reply.encode('utf-8'))
+                            except OSError:
+                                pass
+                        elif msg.get('cmd') == 'ping':
+                            reply = json.dumps({'cmd': 'pong'}) + '\n'
                             try:
                                 client.sendall(reply.encode('utf-8'))
                             except OSError:
@@ -285,6 +293,13 @@ class Room:
                 pass
         elif cmd == 'stop' and self.on_stop:
             self.on_stop()
+        elif cmd == 'pong' and self.on_pong and self._ping_sent_at is not None:
+            try:
+                rtt = time.time() - self._ping_sent_at
+                self._ping_sent_at = None
+                self.on_pong(rtt)
+            except (TypeError, ValueError):
+                pass
         elif cmd == 'room_playing' and self.on_room_playing:
             try:
                 players = list(msg.get('players', []))
@@ -298,6 +313,7 @@ class Room:
         self._running = False
         self._client_sync_offset = None
         self._sync_sent_at = None
+        self._ping_sent_at = None
         if self._client_socket:
             try:
                 self._client_socket.shutdown(socket.SHUT_RDWR)
@@ -322,6 +338,18 @@ class Room:
             self._client_socket.sendall(line)
         except OSError:
             pass
+
+    def send_ping(self):
+        """Client only: send ping to host; host replies pong; on_pong(rtt_sec) is called with round-trip time."""
+        if not self.is_client() or not self._client_socket:
+            return
+        self._ping_sent_at = time.time()
+        payload = {'cmd': 'ping'}
+        line = (json.dumps(payload) + '\n').encode('utf-8')
+        try:
+            self._client_socket.sendall(line)
+        except OSError:
+            self._ping_sent_at = None
 
     def send_report_playing(self, label: str):
         """Client only: tell host what we're playing (for room_playing display)."""

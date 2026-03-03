@@ -270,6 +270,7 @@ class App:
         self._sync_temp_paths: list[str] = []
         self._sync_my_reported_label = ''  # label we sent via report_playing (client)
         self._sync_last_players: list = []  # last room_playing list (for client UI refresh)
+        self._sync_last_participant_count: int = -1  # host: previous client count (for "someone joined" feedback)
         # Last selection per tab (so Play together shows it even after switching tabs)
         self._last_file_path: str | None = None
         self._last_os_sid: str | None = None
@@ -340,6 +341,11 @@ class App:
                 base['width'] = ICON_BTN_WIDTH if not small else 2
                 base['height'] = 2 if not large else 2  # keep icon buttons same height when text fallback
                 base['padx'] = ICON_BTN_PADX  # avoid icon cut off on left/right at low res
+                # CONNECT (Join) and LOG emojis can be wider; match image-path padding + extra width so they don't clip (like UPDATE/HOST)
+                if icon_key in ('CONNECT', 'LOG'):
+                    base['padx'] = 6
+                    base['pady'] = 4
+                    base['width'] = 6
             base.update(overrides)
             return base
 
@@ -961,10 +967,24 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.sync_status.pack(side='left', padx=(PAD, 0))
+        self.sync_test_latency_btn = tk.Button(
+            join_btns, text='Test latency', command=self._sync_test_latency,
+            font=SMALL_FONT, fg=FG, bg=CARD, activebackground=CARD, activeforeground=FG,
+            relief='flat', cursor='hand2'
+        )
+        self.sync_test_latency_btn.pack_forget()  # shown when client connected
+        self.sync_test_latency_btn.bind('<Enter>', lambda e: self.sync_test_latency_btn.configure(bg=ACCENT))
+        self.sync_test_latency_btn.bind('<Leave>', lambda e: self.sync_test_latency_btn.configure(bg=CARD))
+        self.sync_latency_label = tk.Label(
+            join_btns, text='', font=SMALL_FONT, fg=ACCENT, bg=CARD
+        )
+        self.sync_latency_label.pack(side='left', padx=(BTN_GAP, 0))
+        _tooltip(self.sync_latency_label, self.sync_status, 'Round-trip time to host. Higher latency may need a longer countdown before play.')
         _tooltip(self.sync_host_btn, sync_host_tooltip, 'Start hosting')
         _tooltip(self.sync_stop_host_btn, sync_host_tooltip, 'Stop hosting')
         _tooltip(self.sync_join_btn, self.sync_status, 'Connect')
         _tooltip(self.sync_disconnect_btn, self.sync_status, 'Disconnect')
+        _tooltip(self.sync_test_latency_btn, self.sync_status, 'Measure round-trip time to host')
         # Client option: play own selection at same time as host
         self.sync_play_my_selection = tk.BooleanVar(value=False)
         sync_options = tk.Frame(sync_frame, bg=BG)
@@ -1016,6 +1036,8 @@ class App:
             self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset))
         def on_sync_ack(offset: float):
             self.root.after(0, lambda: None)  # offset already stored in Room; optional UI feedback
+        def on_pong(rtt_sec: float):
+            self.root.after(0, lambda: self._sync_on_pong(rtt_sec))
         def on_stop():
             self.root.after(0, self.stop)
         def on_room_playing(players: list):
@@ -1026,6 +1048,7 @@ class App:
         self._room.on_play_file = on_play_file
         self._room.on_play_os = on_play_os
         self._room.on_sync_ack = on_sync_ack
+        self._room.on_pong = on_pong
         self._room.on_stop = on_stop
         self._room.on_room_playing = on_room_playing
 
@@ -1159,6 +1182,15 @@ del "%ME%"
             tk.Button(btn_frame, text='Download and run', command=download_and_run, **btn_style).pack(side='left', padx=(0, BTN_GAP))
         tk.Button(btn_frame, text='Close', command=top.destroy, **btn_style).pack(side='left')
 
+    def _sync_play_join_sound(self):
+        """Play a short sound when someone joins (host) or when client connects. No-op if unavailable."""
+        try:
+            if os.name == 'nt':
+                import winsound
+                winsound.MessageBeep(winsound.MB_OK)
+        except Exception:
+            pass
+
     def _sync_update_host_status(self, n: int):
         if not self._room.is_host():
             return
@@ -1166,7 +1198,13 @@ del "%ME%"
         s = self.sync_host_var.get().strip()
         port = s.rsplit(':', 1)[-1] if ':' in s else str(DEFAULT_PORT)
         self.sync_host_var.set(f'{addr}:{port}')
-        self.sync_host_status.config(text=f'  —  {n} participant(s)')
+        # Feedback when someone joins
+        if self._sync_last_participant_count >= 0 and n > self._sync_last_participant_count:
+            self.sync_host_status.config(text=f'  —  Someone joined! ({n} participant(s))')
+            self._sync_play_join_sound()
+        else:
+            self.sync_host_status.config(text=f'  —  {n} participant(s)')
+        self._sync_last_participant_count = n
         if self._room.is_host():
             self._sync_report_selection()  # broadcast so new clients see host selection
 
@@ -1213,11 +1251,13 @@ del "%ME%"
         self.sync_status.config(text='You are the host. Select music and press Play — others will follow.')
         self.sync_play_my_cb.pack_forget()  # hide "play my selection" when host
         self._sync_report_selection()  # show initial selection (or "(select a song)")
+        self._sync_last_participant_count = 0
         self._sync_update_host_status(0)
 
     def _sync_stop_host(self):
         log.info("Stopping host")
         self._room.stop_host()
+        self._sync_last_participant_count = -1
         self.sync_host_var.set(f'{get_lan_ip()}:{DEFAULT_PORT}')
         self.sync_host_btn.config(state='normal')
         self.sync_stop_host_btn.config(state='disabled')
@@ -1270,8 +1310,27 @@ del "%ME%"
         self.sync_disconnect_btn.config(state='normal')
         self.sync_host_btn.config(state='disabled')
         self.sync_play_my_cb.pack(anchor='w')  # show when client
-        self.sync_status.config(text='Connected. Waiting for host to play.')
+        self.sync_status.config(text='Connected to host! Waiting for host to play.')
+        self._sync_play_join_sound()
+        if hasattr(self, 'sync_latency_label'):
+            self.sync_latency_label.config(text='')
+        if hasattr(self, 'sync_test_latency_btn'):
+            self.sync_test_latency_btn.pack(side='left', padx=(0, BTN_GAP))
         self._sync_report_selection()  # report our selection so host sees us (or "(host's selection)")
+
+    def _sync_test_latency(self):
+        """Client: send ping to host; when pong received, show RTT in sync_latency_label."""
+        if not self._room.is_client():
+            return
+        if hasattr(self, 'sync_latency_label'):
+            self.sync_latency_label.config(text='…')
+        self._room.send_ping()
+
+    def _sync_on_pong(self, rtt_sec: float):
+        """Called on main thread when host replied to our ping; show round-trip time."""
+        if hasattr(self, 'sync_latency_label'):
+            ms = max(0, round(rtt_sec * 1000))
+            self.sync_latency_label.config(text=f'Latency: {ms} ms')
 
     def _sync_update_disconnected_ui(self):
         self.sync_join_btn.config(state='normal')
@@ -1279,6 +1338,10 @@ del "%ME%"
         self.sync_host_btn.config(state='normal')
         self.sync_status.config(text='Disconnected.')
         self._sync_my_reported_label = ''
+        if hasattr(self, 'sync_test_latency_btn'):
+            self.sync_test_latency_btn.pack_forget()
+        if hasattr(self, 'sync_latency_label'):
+            self.sync_latency_label.config(text='')
         self._sync_update_now_playing([])
 
     def _sync_update_now_playing(self, players: list):
