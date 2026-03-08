@@ -30,6 +30,7 @@ from src.os_proto import (
     get_sequence_instruments,
     sequence_binary_to_midi,
 )
+from src.file_favorites import FileFavorites
 from src.os_favorites import OsFavorites
 from src.playlist import Playlist
 from src.song_settings import SongSettings
@@ -266,6 +267,7 @@ class App:
         style.map('TCombobox', fieldbackground=[('readonly', ENTRY_BG)])
 
         self.folder_path = ''
+        self._file_list_paths: list[str] = []  # full paths in file listbox order (for ★ and get_selected_file)
         self.tempo = tk.DoubleVar(value=1.0)
         self.transpose = tk.IntVar(value=0)
         # Repeat options and current playback source
@@ -295,6 +297,7 @@ class App:
         self._file_simplify_by_category: bool = True  # remember "Simplify by category" for File track dialog (default on when available)
 
         self._song_settings = SongSettings()
+        self._file_favorites = FileFavorites(self._song_settings.settings_dir)
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
 
         def _tooltip(btn, status_widget, hint: str):
@@ -431,13 +434,29 @@ class App:
         open_folder_btn.bind('<Leave>', lambda e: open_folder_btn.configure(bg=CARD))
         tk.Label(file_inner, text='MIDI file', font=LABEL_FONT, fg=FG, bg=CARD).grid(
             row=2, column=0, sticky='w', pady=(PAD, SMALL_PAD))
+        file_icon_row = tk.Frame(file_inner, bg=CARD)
+        file_icon_row.grid(row=2, column=1, sticky='e')
         add_to_playlist_file_btn = tk.Button(
-            file_inner, command=self._add_file_to_playlist,
+            file_icon_row, command=self._add_file_to_playlist,
             **_icon_btn_kwargs('ADD_TO_PLAYLIST', small=True)
         )
-        add_to_playlist_file_btn.grid(row=2, column=1, sticky='e')
+        add_to_playlist_file_btn.pack(side='right', padx=(BTN_GAP, 0))
         add_to_playlist_file_btn.bind('<Enter>', lambda e: add_to_playlist_file_btn.configure(bg=ACCENT))
         add_to_playlist_file_btn.bind('<Leave>', lambda e: add_to_playlist_file_btn.configure(bg=CARD))
+        file_unfav_btn = tk.Button(
+            file_icon_row, command=self._file_remove_from_favorites,
+            **_icon_btn_kwargs('FAV_OFF', small=True)
+        )
+        file_unfav_btn.pack(side='right', padx=(BTN_GAP, 0))
+        file_unfav_btn.bind('<Enter>', lambda e: file_unfav_btn.configure(bg=ACCENT))
+        file_unfav_btn.bind('<Leave>', lambda e: file_unfav_btn.configure(bg=CARD))
+        file_fav_btn = tk.Button(
+            file_icon_row, command=self._file_add_to_favorites,
+            **_icon_btn_kwargs('FAV', small=True)
+        )
+        file_fav_btn.pack(side='right', padx=(BTN_GAP, 0))
+        file_fav_btn.bind('<Enter>', lambda e: file_fav_btn.configure(bg=ACCENT))
+        file_fav_btn.bind('<Leave>', lambda e: file_fav_btn.configure(bg=CARD))
         list_frame = tk.Frame(file_inner, bg=CARD)
         list_frame.grid(row=3, column=0, columnspan=2, sticky='nsew', pady=(0, SMALL_PAD))
         file_inner.rowconfigure(3, weight=1)
@@ -564,6 +583,8 @@ class App:
         _tooltip(self._log_btn, self.status, 'Open log file')
         _tooltip(self._update_btn, self.status, 'Check for updates')
         _tooltip(add_to_playlist_file_btn, self.status, 'Add to playlist')
+        _tooltip(file_fav_btn, self.status, 'Add to favorites')
+        _tooltip(file_unfav_btn, self.status, 'Remove from favorites')
         _tooltip(save_file_cb, self.status, 'Save tempo/transpose for this song')
         _tooltip(self.play_btn, self.status, 'Play')
         _tooltip(self.stop_btn, self.status, 'Stop (Escape from any window)')
@@ -1243,23 +1264,19 @@ class App:
             return
         self.folder_path = folder
         self.folder_label.config(text=folder[:60] + '...' if len(folder) > 60 else folder)
-        self.file_listbox.delete(0, tk.END)
         try:
-            names = sorted(
-                n for n in os.listdir(folder)
-                if n.lower().endswith('.mid') or n.lower().endswith('.midi')
-            )
-            for n in names:
-                self.file_listbox.insert(tk.END, n)
-            if names:
+            self._file_list_paths = self._build_file_list_paths(folder)
+            self._refresh_file_listbox()
+            if self._file_list_paths:
                 self.file_listbox.selection_set(0)
                 self.file_listbox.see(0)
-                self._last_file_path = os.path.join(folder, names[0])
+                self._last_file_path = self._file_list_paths[0]
                 self._last_tab_visited = 'file'
             else:
                 self._last_file_path = None
         except OSError:
             self.folder_path = ''
+            self._file_list_paths = []
             self.folder_label.config(text='No folder selected')
             return
         self._sync_update_your_selection_label()
@@ -2582,24 +2599,35 @@ del "%ME%"
             messagebox.showerror('Save failed', str(e))
             self.os_status.config(text='Save failed.')
 
+    def _build_file_list_paths(self, folder: str) -> list[str]:
+        """Return full paths of .mid/.midi in folder, favorites first then by name."""
+        try:
+            names = sorted(
+                n for n in os.listdir(folder)
+                if n.lower().endswith('.mid') or n.lower().endswith('.midi')
+            )
+        except OSError:
+            return []
+        paths = [os.path.join(folder, n) for n in names]
+        fav_paths = self._file_favorites.fav_paths()
+        fav_norm = {os.path.normpath(p) for p in fav_paths}
+        fav_in_folder = sorted([p for p in paths if os.path.normpath(p) in fav_norm], key=os.path.basename)
+        rest = sorted([p for p in paths if os.path.normpath(p) not in fav_norm], key=os.path.basename)
+        return fav_in_folder + rest
+
     def open_folder(self):
         folder = filedialog.askdirectory(title='Select folder with MIDI files')
         if not folder:
             return
         self.folder_path = folder
         self.folder_label.config(text=folder[:60] + '...' if len(folder) > 60 else folder)
-        self.file_listbox.delete(0, tk.END)
         try:
-            names = sorted(
-                n for n in os.listdir(folder)
-                if n.lower().endswith('.mid') or n.lower().endswith('.midi')
-            )
-            for n in names:
-                self.file_listbox.insert(tk.END, n)
-            if names:
+            self._file_list_paths = self._build_file_list_paths(folder)
+            self._refresh_file_listbox()
+            if self._file_list_paths:
                 self.file_listbox.selection_set(0)
                 self.file_listbox.see(0)
-                self._last_file_path = os.path.join(folder, names[0])
+                self._last_file_path = self._file_list_paths[0]
                 self._last_tab_visited = 'file'
             else:
                 self._last_file_path = None
@@ -2608,14 +2636,32 @@ del "%ME%"
         self._save_last_file_folder(folder)
         self._sync_update_your_selection_label()
 
+    def _file_display_line(self, path: str) -> str:
+        fav_paths = self._file_favorites.fav_paths()
+        prefix = '★ ' if os.path.normpath(path) in fav_paths else '  '
+        name = os.path.basename(path)
+        return prefix + (name[:55] + '…' if len(name) > 55 else name)
+
+    def _refresh_file_listbox(self) -> None:
+        """Redraw file listbox from _file_list_paths (with ★ for favorites)."""
+        self.file_listbox.delete(0, tk.END)
+        for path in self._file_list_paths:
+            self.file_listbox.insert(tk.END, self._file_display_line(path))
+        fav_norm = {os.path.normpath(p) for p in self._file_favorites.fav_paths()}
+        n_fav = sum(1 for p in self._file_list_paths if os.path.normpath(p) in fav_norm)
+        if n_fav and self.folder_path:
+            self.status.config(text=f'★ {n_fav} favorite{"s" if n_fav != 1 else ""} in this folder.')
+
     def get_selected_file(self):
-        if not self.folder_path:
+        if not self.folder_path or not self._file_list_paths:
             return None
         sel = self.file_listbox.curselection()
         if not sel:
             return None
-        name = self.file_listbox.get(sel[0])
-        return os.path.join(self.folder_path, name)
+        idx = sel[0]
+        if idx >= len(self._file_list_paths):
+            return None
+        return self._file_list_paths[idx]
 
     def _playlist_display_line(self, item: tuple[str, ...]) -> str:
         if item[0] == 'file':
@@ -2644,7 +2690,7 @@ del "%ME%"
         self.playlist_listbox.activate(self._playlist.current_index())
 
     def _add_file_to_playlist(self):
-        if not self.folder_path:
+        if not self.folder_path or not self._file_list_paths:
             messagebox.showwarning('No folder', 'Open a folder first.')
             return
         sel = list(self.file_listbox.curselection())
@@ -2652,10 +2698,47 @@ del "%ME%"
             messagebox.showwarning('No selection', 'Select one or more MIDI files to add.')
             return
         for idx in sel:
-            name = self.file_listbox.get(idx)
-            path = os.path.join(self.folder_path, name)
-            self._playlist.add_file(path)
+            if idx < len(self._file_list_paths):
+                self._playlist.add_file(self._file_list_paths[idx])
         self._refresh_playlist_listbox()
+
+    def _file_add_to_favorites(self):
+        path = self.get_selected_file()
+        if not path:
+            messagebox.showwarning('No selection', 'Select a MIDI file first.')
+            return
+        if os.path.normpath(path) in self._file_favorites.fav_paths():
+            self.status.config(text='Already in favorites.')
+            return
+        if not self._file_favorites.add(path):
+            self.status.config(text='Already in favorites.')
+            return
+        self._file_list_paths = self._build_file_list_paths(self.folder_path)
+        self._refresh_file_listbox()
+        name = os.path.basename(path)
+        self.status.config(text=f'Added to favorites: {name[:40]}…' if len(name) > 40 else f'Added to favorites: {name}')
+        # Select the file (now at top) so user sees it
+        try:
+            norm = os.path.normpath(path)
+            idx = next(i for i, p in enumerate(self._file_list_paths) if os.path.normpath(p) == norm)
+            self.file_listbox.selection_clear(0, tk.END)
+            self.file_listbox.selection_set(idx)
+            self.file_listbox.see(idx)
+        except (StopIteration, tk.TclError):
+            pass
+
+    def _file_remove_from_favorites(self):
+        path = self.get_selected_file()
+        if not path:
+            messagebox.showwarning('No selection', 'Select a MIDI file first.')
+            return
+        if os.path.normpath(path) not in self._file_favorites.fav_paths():
+            self.status.config(text='Not in favorites.')
+            return
+        self._file_favorites.remove(path)
+        self._file_list_paths = self._build_file_list_paths(self.folder_path)
+        self._refresh_file_listbox()
+        self.status.config(text='Removed from favorites.')
 
     def _add_os_to_playlist(self):
         sel = list(self.os_listbox.curselection())
