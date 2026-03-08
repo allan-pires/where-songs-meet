@@ -42,6 +42,8 @@ from src.version import __version__ as APP_VERSION
 from src.window_focus import focus_process_window, get_foreground_process_name
 from src import log_config as _log_config
 from src import theme as _theme
+from src.ui_controls import ControlButton
+from src.ui_helpers import bind_tooltip
 
 _t = _theme
 ACCENT = _t.ACCENT
@@ -100,124 +102,9 @@ TITLE_FONT = _t.TITLE_FONT
 LABEL_FONT = _t.LABEL_FONT
 
 
-# Play/Stop symbols (no Canvas — avoids Tk "bad argument 'N': must be name of window" on some builds)
-_CTRL_PLAY_SYMBOL = '\u25b6'   # ▶
-_CTRL_STOP_SYMBOL = '\u25a0'   # ■
-
-# Control button shape: enough height for 1080p so play/stop glyph isn't clipped
-_CTRL_BTN_W = 56
-_CTRL_BTN_H = 40
-_CTRL_BTN_R = 6
-
-
-def _rounded_rect_photo(w: int, h: int, color_hex: str, radius: int):
-    """Return a PhotoImage of a rounded rectangle (Pillow). Kept for GC."""
-    try:
-        from PIL import Image, ImageDraw, ImageTk
-        img = Image.new("RGB", (w, h), color_hex)
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=color_hex, outline=color_hex)
-        return ImageTk.PhotoImage(img)
-    except Exception:
-        return None
-
-
-class ControlButton(tk.Frame):
-    """Play or Stop control button: rounded rect image if Pillow available, else flat tk.Button."""
-
-    def __init__(self, parent, kind, bg, hover_bg, fg, command, initial_state=tk.NORMAL, disabled_bg=None):
-        assert kind in ('play', 'stop'), kind
-        self._bg = bg
-        self._hover_bg = hover_bg
-        self._disabled_bg = disabled_bg if disabled_bg is not None else CARD
-        self._command = command
-        self._state = initial_state
-        self._kind = kind
-        text = _CTRL_PLAY_SYMBOL if kind == 'play' else _CTRL_STOP_SYMBOL
-        super().__init__(parent, bg=CARD)
-        # Fixed size so button doesn't shrink when state changes (e.g. play disabled while playing)
-        self.pack_propagate(False)
-        tk.Frame.config(self, width=_CTRL_BTN_W, height=_CTRL_BTN_H)
-        # Rounded-rect images (keep refs so they aren't GC'd)
-        self._img_normal = _rounded_rect_photo(_CTRL_BTN_W, _CTRL_BTN_H, bg, _CTRL_BTN_R)
-        self._img_hover = _rounded_rect_photo(_CTRL_BTN_W, _CTRL_BTN_H, hover_bg, _CTRL_BTN_R)
-        self._img_disabled = _rounded_rect_photo(_CTRL_BTN_W, _CTRL_BTN_H, self._disabled_bg, _CTRL_BTN_R)
-        use_rounded = self._img_normal is not None
-        show_disabled = initial_state == tk.DISABLED
-        init_bg = self._disabled_bg if show_disabled else bg
-        if use_rounded:
-            self._btn = tk.Button(
-                self, text=text, font=(FONT_FAMILY, 11), fg=fg,
-                image=self._img_disabled if show_disabled else self._img_normal,
-                compound='center',
-                bg=init_bg,
-                activebackground=init_bg, activeforeground=fg,
-                highlightbackground=init_bg, highlightcolor=init_bg,
-                relief='flat', bd=0, highlightthickness=0, padx=0, pady=0,
-                cursor='hand2', command=command, state=initial_state,
-                disabledforeground=FG_DISABLED, takefocus=0,
-            )
-        else:
-            self._btn = tk.Button(
-                self, text=text, font=(FONT_FAMILY, 12), fg=fg,
-                bg=init_bg,
-                activebackground=init_bg, activeforeground=fg,
-                highlightbackground=init_bg, highlightcolor=init_bg,
-                relief='flat', padx=18, pady=3, cursor='hand2',
-                command=command, state=initial_state,
-                disabledforeground=FG_DISABLED, takefocus=0,
-            )
-        self._use_rounded = use_rounded
-        self._btn.pack()
-        self._btn.bind('<Enter>', self._on_enter)
-        self._btn.bind('<Leave>', self._on_leave)
-
-    def _current_image(self):
-        if self._btn['state'] == 'disabled':
-            return self._img_disabled
-        return self._img_normal
-
-    def _apply_bg(self, color):
-        """Set bg and matching border/active colors so no visible border mismatch."""
-        self._btn.configure(
-            bg=color, activebackground=color,
-            highlightbackground=color, highlightcolor=color,
-        )
-
-    def _on_enter(self, e):
-        if self._btn['state'] == 'normal':
-            self._apply_bg(self._hover_bg)
-            if self._use_rounded:
-                self._btn.configure(image=self._img_hover)
-        else:
-            self._apply_bg(self._disabled_bg)
-            if self._use_rounded:
-                self._btn.configure(image=self._img_disabled)
-
-    def _on_leave(self, e):
-        color = self._disabled_bg if self._btn['state'] == 'disabled' else self._bg
-        self._apply_bg(color)
-        if self._use_rounded:
-            self._btn.configure(image=self._current_image())
-
-    def config(self, **kwargs):
-        if 'state' in kwargs:
-            self._btn.config(state=kwargs['state'])
-        if 'bg' in kwargs:
-            self._bg = kwargs['bg']
-            self._apply_bg(self._bg)
-        if self._use_rounded and ('state' in kwargs or 'bg' in kwargs):
-            self._btn.configure(image=self._current_image())
-        if 'state' in kwargs and kwargs['state'] == 'disabled':
-            self._apply_bg(self._disabled_bg)
-
-    def __getitem__(self, key):
-        if key == 'state':
-            return self._btn['state']
-        raise KeyError(key)
-
-
 class App:
+    """Main Tkinter application: File tab, Online Sequencer tab, Playlist, Play together (sync), and playback."""
+
     def __init__(self, root, borderless: bool = True):
         self.root = root
         self._borderless = borderless
@@ -299,10 +186,6 @@ class App:
         self._song_settings = SongSettings()
         self._file_favorites = FileFavorites(self._song_settings.settings_dir)
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
-
-        def _tooltip(btn, status_widget, hint: str):
-            btn.bind('<Enter>', lambda e: status_widget.config(text=hint))
-            btn.bind('<Leave>', lambda e: status_widget.config(text=''))
 
         self._icon_images = {}
         self._icon_images_small = {}
@@ -579,15 +462,15 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.status.pack(anchor='w')
-        _tooltip(open_folder_btn, self.status, 'Open folder')
-        _tooltip(self._log_btn, self.status, 'Open log file')
-        _tooltip(self._update_btn, self.status, 'Check for updates')
-        _tooltip(add_to_playlist_file_btn, self.status, 'Add to playlist')
-        _tooltip(file_fav_btn, self.status, 'Add to favorites')
-        _tooltip(file_unfav_btn, self.status, 'Remove from favorites')
-        _tooltip(save_file_cb, self.status, 'Save tempo/transpose for this song')
-        _tooltip(self.play_btn, self.status, 'Play')
-        _tooltip(self.stop_btn, self.status, 'Stop (Escape from any window)')
+        bind_tooltip(open_folder_btn, self.status, 'Open folder')
+        bind_tooltip(self._log_btn, self.status, 'Open log file')
+        bind_tooltip(self._update_btn, self.status, 'Check for updates')
+        bind_tooltip(add_to_playlist_file_btn, self.status, 'Add to playlist')
+        bind_tooltip(file_fav_btn, self.status, 'Add to favorites')
+        bind_tooltip(file_unfav_btn, self.status, 'Remove from favorites')
+        bind_tooltip(save_file_cb, self.status, 'Save tempo/transpose for this song')
+        bind_tooltip(self.play_btn, self.status, 'Play')
+        bind_tooltip(self.stop_btn, self.status, 'Stop (Escape from any window)')
 
         # ---- Tab 2: Online Sequencer ----
         os_tab = tk.Frame(self.notebook, bg=CARD)
@@ -711,13 +594,13 @@ class App:
         self.os_status.pack(anchor='w')
         if self._os_favorites.list_all():
             self.os_status.config(text=f'★ {len(self._os_favorites.list_all())} favorites. Load list for more.')
-        _tooltip(load_btn, self.os_status, 'Load list')
-        _tooltip(os_open_btn, self.os_status, 'Open selected in browser')
-        _tooltip(os_download_btn, self.os_status, 'Download MIDI')
-        _tooltip(os_fav_btn, self.os_status, 'Add to favorites')
-        _tooltip(os_unfav_btn, self.os_status, 'Remove from favorites')
-        _tooltip(os_add_playlist_btn, self.os_status, 'Add to playlist')
-        _tooltip(os_search_btn, self.os_status, 'Search')
+        bind_tooltip(load_btn, self.os_status, 'Load list')
+        bind_tooltip(os_open_btn, self.os_status, 'Open selected in browser')
+        bind_tooltip(os_download_btn, self.os_status, 'Download MIDI')
+        bind_tooltip(os_fav_btn, self.os_status, 'Add to favorites')
+        bind_tooltip(os_unfav_btn, self.os_status, 'Remove from favorites')
+        bind_tooltip(os_add_playlist_btn, self.os_status, 'Add to playlist')
+        bind_tooltip(os_search_btn, self.os_status, 'Search')
         # Options (same as File tab: tempo and transpose sliders, shared vars)
         os_opts_frame = tk.LabelFrame(
             os_tab, text='  Options  ', font=LABEL_FONT,
@@ -779,7 +662,7 @@ class App:
             selectcolor=ENTRY_BG, cursor='hand2', command=_on_save_os_cb
         )
         save_os_cb.grid(row=2, column=0, sticky='w', pady=(SMALL_PAD, 0))
-        _tooltip(save_os_cb, self.os_status, 'Save tempo/transpose for this song')
+        bind_tooltip(save_os_cb, self.os_status, 'Save tempo/transpose for this song')
 
         # OS tab: actions (Play, Stop), progress bar (same style as File tab)
         self._os_last_midi_path: str | None = None
@@ -796,8 +679,8 @@ class App:
         )
         self.os_stop_btn.grid(row=0, column=1, padx=(0, CTRL_BTN_GAP))
         os_actions.columnconfigure(2, weight=1)
-        _tooltip(self.os_play_btn, self.os_status, 'Play')
-        _tooltip(self.os_stop_btn, self.os_status, 'Stop (Escape from any window)')
+        bind_tooltip(self.os_play_btn, self.os_status, 'Play')
+        bind_tooltip(self.os_stop_btn, self.os_status, 'Stop (Escape from any window)')
         repeat_os_btn = tk.Checkbutton(
             os_actions, text='Repeat', variable=self.repeat_os,
             font=LABEL_FONT, fg=FG, bg=CARD,
@@ -901,11 +784,11 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.pl_status.pack(anchor='w')
-        _tooltip(pl_remove_btn, self.pl_status, 'Remove selected')
-        _tooltip(pl_clear_btn, self.pl_status, 'Clear playlist')
-        _tooltip(self.pl_play_btn, self.pl_status, 'Play playlist')
-        _tooltip(self.pl_stop_btn, self.pl_status, 'Stop (Escape from any window)')
-        _tooltip(repeat_pl_btn, self.pl_status, 'When finished, play playlist again from the beginning')
+        bind_tooltip(pl_remove_btn, self.pl_status, 'Remove selected')
+        bind_tooltip(pl_clear_btn, self.pl_status, 'Clear playlist')
+        bind_tooltip(self.pl_play_btn, self.pl_status, 'Play playlist')
+        bind_tooltip(self.pl_stop_btn, self.pl_status, 'Stop (Escape from any window)')
+        bind_tooltip(repeat_pl_btn, self.pl_status, 'When finished, play playlist again from the beginning')
 
         # ---- Tab 4: Play together ----
         sync_tab = tk.Frame(self.notebook, bg=BG)
@@ -1047,10 +930,10 @@ class App:
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.sync_status.pack(anchor='w', pady=(SMALL_PAD, 0))
-        _tooltip(self.sync_host_btn, sync_host_tooltip, 'Start hosting')
-        _tooltip(self.sync_stop_host_btn, sync_host_tooltip, 'Stop hosting')
-        _tooltip(self.sync_join_btn, self.sync_status, 'Connect')
-        _tooltip(self.sync_disconnect_btn, self.sync_status, 'Disconnect')
+        bind_tooltip(self.sync_host_btn, sync_host_tooltip, 'Start hosting')
+        bind_tooltip(self.sync_stop_host_btn, sync_host_tooltip, 'Stop hosting')
+        bind_tooltip(self.sync_join_btn, self.sync_status, 'Connect')
+        bind_tooltip(self.sync_disconnect_btn, self.sync_status, 'Disconnect')
         # Latency test on its own row (avoids hover tooltip fighting with status text)
         self.sync_latency_row = tk.Frame(join_inner, bg=CARD)
         self.sync_test_latency_btn = tk.Button(
@@ -1069,8 +952,8 @@ class App:
             self.sync_latency_row, text='', font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
         self.sync_latency_hint.pack(side='left')
-        _tooltip(self.sync_test_latency_btn, self.sync_latency_hint, 'Measure round-trip time to host.')
-        _tooltip(self.sync_latency_label, self.sync_latency_hint, 'Round-trip time to host. Higher latency may need a longer countdown before play.')
+        bind_tooltip(self.sync_test_latency_btn, self.sync_latency_hint, 'Measure round-trip time to host.')
+        bind_tooltip(self.sync_latency_label, self.sync_latency_hint, 'Round-trip time to host. Higher latency may need a longer countdown before play.')
         self.sync_latency_row.pack_forget()  # show only when client connected
         # Client option: play own selection at same time as host
         self.sync_play_my_selection = tk.BooleanVar(value=False)

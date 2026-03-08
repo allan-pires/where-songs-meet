@@ -2,7 +2,6 @@
 
 import logging
 import os
-from typing import Tuple
 
 log = logging.getLogger("src.tunnel")
 
@@ -11,7 +10,7 @@ _tunnel = None  # NgrokTunnel | None
 _public_url = None  # str | None
 
 
-def is_available() -> Tuple[bool, str]:
+def is_available() -> tuple[bool, str]:
     """Return (True, '') if tunnel API is available; else (False, reason)."""
     token = os.environ.get("NGROK_AUTH_TOKEN", "").strip()
     if not token:
@@ -23,7 +22,7 @@ def is_available() -> Tuple[bool, str]:
     return True, ""
 
 
-def start_tcp_tunnel(local_port: int) -> Tuple[bool, str, str]:
+def start_tcp_tunnel(local_port: int) -> tuple[bool, str, str]:
     """
     Start a TCP tunnel to local_port. Returns (ok, public_addr, error_msg).
     public_addr is 'host:port' for friends to use in Join (e.g. '0.tcp.ngrok.io:12345').

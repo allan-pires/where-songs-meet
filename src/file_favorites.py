@@ -3,12 +3,14 @@
 import json
 import os
 
+from src.config import get_config_dir
+
 
 class FileFavorites:
     """Load/save list of full paths to favorited MIDI files."""
 
     def __init__(self, settings_dir: str = ""):
-        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".where_songs_meet")
+        self._dir = get_config_dir(settings_dir)
         self._path = os.path.join(self._dir, "file_favorites.json")
         self._paths: list[str] = []
         self.load()

@@ -1,11 +1,14 @@
-"""Tests for src.midi: note mapping, MCR line building, export, parse."""
+"""Tests for src.midi: note mapping, MCR line building, export, parse, GM/track groups."""
 
 import pytest
 from pathlib import Path
 
 from src.midi import (
+    GM_CATEGORIES,
     build_mcr_lines,
     export_mcr,
+    get_file_track_groups_for_tracks,
+    get_midi_track_info,
     map_note_to_key,
     parse_midi,
 )
@@ -125,3 +128,80 @@ class TestParseMidi:
     def test_parse_midi_invalid_path_raises(self):
         with pytest.raises((FileNotFoundError, OSError)):
             parse_midi('nonexistent_file_12345.mid')
+
+
+class TestGMCategories:
+    """Test GM_CATEGORIES covers 0-127 and has expected names."""
+
+    def test_covers_all_programs(self):
+        all_progs = set()
+        for _name, progs in GM_CATEGORIES:
+            all_progs |= progs
+        assert all_progs == set(range(128))
+
+    def test_six_categories(self):
+        assert len(GM_CATEGORIES) == 6
+        names = [n for n, _ in GM_CATEGORIES]
+        assert "Keys" in names
+        assert "Other" in names
+
+
+class TestGetFileTrackGroupsForTracks:
+    """Test get_file_track_groups_for_tracks with synthetic tracks."""
+
+    def test_empty_tracks(self):
+        assert get_file_track_groups_for_tracks([]) == []
+
+    def test_single_track_keys(self):
+        tracks = [(0, "Piano", 0)]
+        result = get_file_track_groups_for_tracks(tracks)
+        assert len(result) == 1
+        assert result[0][0] == "Keys"
+        assert result[0][1] == {0}
+
+    def test_multiple_categories(self):
+        # prog 0=Keys, 25=Guitar& Bass range(24,40), 40=Strings
+        tracks = [(0, "Piano", 0), (1, "Guitar", 25), (2, "Strings", 40)]
+        result = get_file_track_groups_for_tracks(tracks)
+        names = [r[0] for r in result]
+        assert "Keys" in names
+        assert "Guitar & Bass" in names
+        assert "Strings" in names
+        key_indices = next(r[1] for r in result if r[0] == "Keys")
+        assert key_indices == {0}
+
+    def test_track_index_preserved(self):
+        tracks = [(3, "Synth", 80)]  # Synths
+        result = get_file_track_groups_for_tracks(tracks)
+        assert result[0][1] == {3}
+
+
+class TestGetMidiTrackInfo:
+    """Test get_midi_track_info with temp MIDI file."""
+
+    def test_single_track_no_meta(self, tmp_path):
+        import mido
+        p = tmp_path / "t.mid"
+        mid = mido.MidiFile()
+        track = mido.MidiTrack()
+        track.append(mido.Message("program_change", program=5))
+        mid.tracks.append(track)
+        mid.save(str(p))
+        info = get_midi_track_info(str(p))
+        assert len(info) == 1
+        assert info[0][0] == 0
+        assert info[0][1] == "Track 0"
+        assert info[0][2] == 5
+
+    def test_track_name_and_program(self, tmp_path):
+        import mido
+        p = tmp_path / "t.mid"
+        mid = mido.MidiFile()
+        track = mido.MidiTrack()
+        track.append(mido.MetaMessage("track_name", name="Bass"))
+        track.append(mido.Message("program_change", program=33))
+        mid.tracks.append(track)
+        mid.save(str(p))
+        info = get_midi_track_info(str(p))
+        assert info[0][1] == "Bass"
+        assert info[0][2] == 33

@@ -124,16 +124,19 @@ The app may need to run as Administrator so keyboard input reaches games. Window
 - **`main.py`** — Entry point; requests admin then starts the GUI  
 - **`tools/build_exe.py`** — Build single-file Windows exe (PyInstaller)  
 - **`.github/workflows/release.yml`** — On push of tag `v*`, builds exe and creates a GitHub release  
+- **`midi-to-mcr.spec`** — PyInstaller spec (optional); preferred build is **`python tools/build_exe.py`**  
 - **`src/`** — Core package  
   - **`midi.py`** — Parse MIDI, map notes to keys, build .mcr lines, export  
   - **`playback.py`** — Run playback from events or file (pynput)  
+  - **`config.py`** — Config directory path (single source of truth for `~/.where_songs_meet`)  
   - **`sync.py`** — Room (host/join), LAN IP, play-together protocol  
   - **`tunnel.py`** — Public link via ngrok TCP tunnel for remote join  
   - **`song_settings.py`** — Per-song tempo/transpose persistence  
-  - **`os_favorites.py`** — Online Sequencer favorites persistence  
+  - **`os_favorites.py`**, **`file_favorites.py`** — Favorites persistence (OS sequences, file paths)  
   - **`playlist.py`** — Playlist state (file/OS items, index)  
   - **`online_sequencer.py`** — Fetch/search sequences, download MIDI  
-  - **`app.py`** — Tkinter GUI  
+  - **`app.py`** — Tkinter GUI (main window and tabs)  
+  - **`ui_controls.py`**, **`ui_helpers.py`** — Reusable controls (e.g. Play/Stop button), tooltips  
   - **`theme.py`** — UI constants  
   - **`version.py`** — App version and GitHub repo for update checks  
   - **`updater.py`** — Fetch latest release, compare version, open/download update  
