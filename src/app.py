@@ -118,7 +118,10 @@ class App:
         BORDER_WIDTH = 5  # visible border around the app (root shows this color; content frame is inset)
         root.configure(bg=BORDER)
         root.minsize(360 + 2 * BORDER_WIDTH, 520 + 2 * BORDER_WIDTH)
-        root.geometry(f'{450 + 2 * BORDER_WIDTH}x{640 + 2 * BORDER_WIDTH}')
+        # Set geometry before window is ever shown to avoid flash: saved size/position or default
+        self._song_settings = SongSettings()
+        if not self._load_window_geometry():
+            root.geometry(f'{450 + 2 * BORDER_WIDTH}x{640 + 2 * BORDER_WIDTH}')
         root.option_add('*Font', LABEL_FONT)
         root.option_add('*Background', BG)
         root.option_add('*Foreground', FG)
@@ -185,7 +188,6 @@ class App:
         self._file_last_tracks: dict[str, set[int]] = {}  # path -> last selected track indices (in-memory only)
         self._file_simplify_by_category: bool = True  # remember "Simplify by category" for File track dialog (default on when available)
 
-        self._song_settings = SongSettings()
         self._file_favorites = FileFavorites(self._song_settings.settings_dir)
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
 
@@ -1045,6 +1047,7 @@ class App:
                 root.geometry(f'+{self._header_drag_start[2] + dx}+{self._header_drag_start[3] + dy}')
             def _on_header_release(_e):
                 self._header_drag_start = None
+                self._save_window_geometry()
             for w in (header, title_label, version_label):
                 w.bind('<Button-1>', _on_header_press)
                 w.bind('<B1-Motion>', _on_header_drag)
@@ -1107,6 +1110,7 @@ class App:
                     w, h, x, y = self._resize_pending
                     self._resize_pending = None
                     root.geometry(f'{w}x{h}+{x}+{y}')
+                    self._save_window_geometry()
                 self._resize_start = None
 
             # Place edge/corner handles (content is packed with padx=pady=RESIZE_HANDLE)
@@ -1154,18 +1158,75 @@ class App:
     def _prefs_path(self) -> str:
         return os.path.join(self._song_settings.settings_dir, "prefs.json")
 
-    def _load_last_file_folder(self) -> None:
-        """If a last file folder was saved and still exists, load it and populate the file list."""
+    def _load_prefs(self) -> dict:
+        """Load prefs.json; return {} if missing or invalid."""
         path = self._prefs_path()
         if not path or not os.path.isfile(path):
-            return
+            return {}
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            folder = data.get("last_file_folder") if isinstance(data, dict) else None
-            if not folder or not isinstance(folder, str) or not os.path.isdir(folder):
-                return
+            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_prefs(self, updates: dict) -> None:
+        """Merge updates into prefs.json and save."""
+        prefs_path = self._prefs_path()
+        if not prefs_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
+            data = self._load_prefs()
+            data.update(updates)
+            with open(prefs_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    def _load_window_geometry(self) -> bool:
+        """Restore last window size and position from prefs if valid. Return True if applied."""
+        data = self._load_prefs().get("window_geometry")
+        if not isinstance(data, dict):
+            return False
+        w = data.get("width")
+        h = data.get("height")
+        x = data.get("x")
+        y = data.get("y")
+        if not all(isinstance(v, int) for v in (w, h, x, y)):
+            return False
+        RESIZE_HANDLE = 5
+        MIN_W = 360 + 2 * RESIZE_HANDLE
+        MIN_H = 520 + 2 * RESIZE_HANDLE
+        MAX_W = 4096
+        MAX_H = 4096
+        if not (MIN_W <= w <= MAX_W and MIN_H <= h <= MAX_H):
+            return False
+        # Clamp position so at least part of the window is on screen
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = max(-w + 80, min(x, sw - 80))
+        y = max(-h + 80, min(y, sh - 80))
+        self.root.geometry(f'{w}x{h}+{x}+{y}')
+        return True
+
+    def _save_window_geometry(self) -> None:
+        """Persist current window size and position."""
+        try:
+            w = self.root.winfo_width()
+            h = self.root.winfo_height()
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
+            if w > 0 and h > 0:
+                self._save_prefs({"window_geometry": {"width": w, "height": h, "x": x, "y": y}})
+        except tk.TclError:
+            pass
+
+    def _load_last_file_folder(self) -> None:
+        """If a last file folder was saved and still exists, load it and populate the file list."""
+        data = self._load_prefs()
+        folder = data.get("last_file_folder") if isinstance(data, dict) else None
+        if not folder or not isinstance(folder, str) or not os.path.isdir(folder):
             return
         self.folder_path = folder
         self.folder_label.config(text=folder[:60] + '...' if len(folder) > 60 else folder)
@@ -1190,16 +1251,7 @@ class App:
         """Persist the last opened file folder."""
         if not folder:
             return
-        prefs_path = self._prefs_path()
-        if not prefs_path:
-            return
-        try:
-            os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
-            data = {"last_file_folder": folder}
-            with open(prefs_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except OSError:
-            pass
+        self._save_prefs({"last_file_folder": folder})
 
     def _sync_register_room_callbacks(self):
         """Register room callbacks; all run via root.after on main thread."""
