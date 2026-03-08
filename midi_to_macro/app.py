@@ -285,6 +285,7 @@ class App:
         self._last_os_title: str | None = None
         self._last_tab_visited: str = 'file'  # 'file' or 'os'
         self._os_last_instruments: dict[str, set[int]] = {}  # sid -> last selected instrument ids (in-memory only)
+        self._os_last_sync_assignments: dict[str, list[set[int]]] = {}  # sid -> [host_set, p1_set, p2_set, ...] per participant
         self._file_last_tracks: dict[str, set[int]] = {}  # path -> last selected track indices (in-memory only)
 
         self._song_settings = SongSettings()
@@ -2047,16 +2048,17 @@ del "%ME%"
         ).pack(anchor='w')
         # participant_index -> { inst_id -> BooleanVar }
         vars_by_participant: list[dict[int, tk.BooleanVar]] = []
-        last_assignments = self._os_last_instruments.get(sid)
+        last_sync = self._os_last_sync_assignments.get(sid)  # list of sets per participant, or None
         for p_idx, p_name in enumerate(participant_names):
             row_frame = tk.LabelFrame(frame, text=f'  {p_name}  ', font=SMALL_FONT, fg=SUBTLE, bg=CARD, labelanchor='n')
             row_frame.pack(fill='x', pady=(SMALL_PAD, 0))
             inner = tk.Frame(row_frame, bg=CARD)
             inner.pack(fill='x', padx=SMALL_PAD, pady=(2, SMALL_PAD))
             vars_by_id: dict[int, tk.BooleanVar] = {}
+            part_set = last_sync[p_idx] if last_sync and p_idx < len(last_sync) else None
             for inst_id, name in instruments:
-                if last_assignments is not None and p_idx == 0:
-                    checked = inst_id in last_assignments
+                if part_set is not None:
+                    checked = inst_id in part_set
                 else:
                     checked = True
                 var = tk.BooleanVar(value=checked)
@@ -2124,6 +2126,7 @@ del "%ME%"
             host_selection = selections[0]
             client_assignments = [list(selections[i]) for i in range(1, len(selections))]
             self._os_last_instruments[sid] = host_selection
+            self._os_last_sync_assignments[sid] = [selections[i] for i in range(len(selections))]
             top.destroy()
             try:
                 path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=host_selection)

@@ -400,18 +400,35 @@ def sequence_binary_to_midi(
     import mido
     from mido import MidiFile, MidiTrack, Message, MetaMessage, bpm2tempo
 
-    notes = _parse_sequence_notes(binary)
-    if not notes:
+    notes_all = _parse_sequence_notes(binary)
+    if not notes_all:
         raise ValueError("No notes found in sequence data")
-    if instrument_ids is not None:
-        expanded = _expand_instrument_ids_for_filter(instrument_ids)
-        notes = [n for n in notes if n.get("instrument", 0) in expanded]
-        if not notes:
-            raise ValueError("No notes left after filtering by selected instruments")
 
     used_bpm = _extract_bpm(binary) or bpm
     ticks_per_beat = 384
     tempo = bpm2tempo(used_bpm)
+    sec_per_beat = 60.0 / used_bpm
+    ticks_per_sec = ticks_per_beat * used_bpm / 60.0
+    COMPACT_TICKS_PER_UNIT = 124  # 2 units = 248 ticks; same scale as original
+
+    def _note_time_sec(note: dict) -> float:
+        t = note.get("time", 0)
+        if note.get("_time_unit") == "ms":
+            return t * COMPACT_TICKS_PER_UNIT / ticks_per_sec
+        return t * sec_per_beat  # blob: beats
+
+    # Global song start = earliest note from ANY instrument. Essential for play-together: when the client
+    # builds MIDI with only their assigned instruments, this keeps each part at the right time (leading
+    # silence until that instrument's first note).
+    global_min_sec = min(_note_time_sec(n) for n in notes_all) if notes_all else 0.0
+
+    if instrument_ids is not None:
+        expanded = _expand_instrument_ids_for_filter(instrument_ids)
+        notes = [n for n in notes_all if n.get("instrument", 0) in expanded]
+        if not notes:
+            raise ValueError("No notes left after filtering by selected instruments")
+    else:
+        notes = notes_all
 
     # Sort by (time, instrument, type_index) to approximate site export order (tracks then time)
     notes_sorted = sorted(
@@ -419,26 +436,22 @@ def sequence_binary_to_midi(
         key=lambda n: (n.get("time", 0), n.get("instrument", 0), n.get("type_index", n.get("midi_note", 0))),
     )
 
-    # For compact notes: scale so gaps match correct timing. 48 = 133 ms per 2 units; higher = slower.
-    compact_times = [n.get("time", 0) for n in notes_sorted if n.get("_time_unit") == "ms"]
-    min_compact_time = min(compact_times) if compact_times else 0
-    COMPACT_TICKS_PER_UNIT = 124  # 2 units = 248 ticks ≈ 344 ms
+    note_times_sec = [_note_time_sec(n) for n in notes_sorted]
 
     track = MidiTrack()
     track.append(MetaMessage("set_tempo", tempo=tempo))
     events: list[tuple[int, int, bool, int]] = []  # (time_ticks, midi_note, is_on, velocity)
-    for n in notes_sorted:
-        t = n.get("time", 0)
+    for i, n in enumerate(notes_sorted):
+        t_sec = note_times_sec[i]
         length = n.get("length", 0.25)
         midi_note = _note_to_midi(n)
         vel = int(max(0, min(127, n.get("volume", 1) * 50)))
         if vel <= 0:
             vel = 64
+        time_ticks = max(0, int(round((t_sec - global_min_sec) * ticks_per_sec)))
         if n.get("_time_unit") == "ms":
-            time_ticks = max(0, int(round((t - min_compact_time) * COMPACT_TICKS_PER_UNIT)))
             length_ticks = max(1, int(round(length * COMPACT_TICKS_PER_UNIT)))
         else:
-            time_ticks = max(0, int(round(t * ticks_per_beat)))
             length_ticks = max(1, int(round(length * ticks_per_beat)))
         events.append((time_ticks, midi_note, True, vel))
         events.append((time_ticks + length_ticks, midi_note, False, 0))
