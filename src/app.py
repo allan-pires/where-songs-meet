@@ -215,16 +215,18 @@ class ControlButton(tk.Frame):
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, borderless: bool = True):
         self.root = root
+        self._borderless = borderless
         root.title('Where Songs Meet')
         root.attributes('-topmost', True)
         self.playing = False
         self._stop_buttons_enabled = False  # enable only when playback actually starts (first progress)
 
-        root.configure(bg=BG)
-        root.minsize(360, 520)
-        root.geometry('450x640')
+        BORDER_WIDTH = 5  # visible border around the app (root shows this color; content frame is inset)
+        root.configure(bg=BORDER)
+        root.minsize(360 + 2 * BORDER_WIDTH, 520 + 2 * BORDER_WIDTH)
+        root.geometry(f'{450 + 2 * BORDER_WIDTH}x{640 + 2 * BORDER_WIDTH}')
         root.option_add('*Font', LABEL_FONT)
         root.option_add('*Background', BG)
         root.option_add('*Foreground', FG)
@@ -360,12 +362,25 @@ class App:
             base.update(overrides)
             return base
 
-        header = tk.Frame(root, bg=BG)
+        content = tk.Frame(root, bg=BG)
+        content.pack(fill='both', expand=True, padx=BORDER_WIDTH, pady=BORDER_WIDTH)
+        header = tk.Frame(content, bg=BG)
         header.pack(fill='x', padx=PAD, pady=(PAD, 2))
-        tk.Label(header, text='Where Songs Meet', font=TITLE_FONT, fg=ACCENT, bg=BG).pack(side='left', anchor='w')
-        tk.Label(header, text=f'  v{APP_VERSION}', font=SMALL_FONT, fg=SUBTLE, bg=BG).pack(side='left', anchor='w')
+        title_label = tk.Label(header, text='Where Songs Meet', font=TITLE_FONT, fg=ACCENT, bg=BG)
+        title_label.pack(side='left', anchor='w')
+        version_label = tk.Label(header, text=f'  v{APP_VERSION}', font=SMALL_FONT, fg=SUBTLE, bg=BG)
+        version_label.pack(side='left', anchor='w')
         header_btns = tk.Frame(header, bg=BG)
         header_btns.pack(side='right')
+        if borderless:
+            close_btn = tk.Button(
+                header_btns, text='\u2715', command=root.quit,
+                font=('Segoe UI', 12), fg=FG, bg=BG, activebackground=STOP_RED, activeforeground=FG,
+                relief='flat', cursor='hand2', padx=4, pady=0
+            )
+            close_btn.pack(side='right', padx=(0, 2))
+            close_btn.bind('<Enter>', lambda e: close_btn.configure(bg=STOP_RED))
+            close_btn.bind('<Leave>', lambda e: close_btn.configure(bg=BG))
         self._log_btn = tk.Button(
             header_btns, command=self._open_log,
             **_icon_btn_kwargs('LOG', bg=BG, activebackground=BG)
@@ -380,7 +395,7 @@ class App:
         self._update_btn.bind('<Leave>', lambda e: self._update_btn.configure(bg=BG))
 
         # Notebook: File tab + Online Sequencer tab
-        self.notebook = ttk.Notebook(root)
+        self.notebook = ttk.Notebook(content)
         self.notebook.pack(fill='both', expand=True, padx=PAD, pady=(0, SMALL_PAD))
 
         # ---- Tab 1: File ----
@@ -1106,6 +1121,26 @@ class App:
         self.notebook.bind('<<NotebookTabChanged>>', _on_notebook_tab_changed)
         self._sync_register_room_callbacks()
         self._start_stop_hotkey_listener()
+
+        if borderless:
+            root.update_idletasks()
+            self._header_drag_start: tuple[int, int, int, int] | None = None
+            def _on_header_press(e):
+                self._header_drag_start = (e.x_root, e.y_root, root.winfo_x(), root.winfo_y())
+            def _on_header_drag(e):
+                if self._header_drag_start is None:
+                    return
+                dx = e.x_root - self._header_drag_start[0]
+                dy = e.y_root - self._header_drag_start[1]
+                root.geometry(f'+{self._header_drag_start[2] + dx}+{self._header_drag_start[3] + dy}')
+            def _on_header_release(_e):
+                self._header_drag_start = None
+            for w in (header, title_label, version_label):
+                w.bind('<Button-1>', _on_header_press)
+                w.bind('<B1-Motion>', _on_header_drag)
+                w.bind('<ButtonRelease-1>', _on_header_release)
+                w.configure(cursor='fleur')
+            root.overrideredirect(True)
 
     def _sync_register_room_callbacks(self):
         """Register room callbacks; all run via root.after on main thread."""
