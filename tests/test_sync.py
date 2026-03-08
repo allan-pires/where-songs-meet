@@ -1,11 +1,11 @@
-"""Tests for where_songs_meet.sync: Room, get_lan_ip, payload format."""
+"""Tests for lib.sync: Room, get_lan_ip, payload format."""
 
 import base64
 import time
 
 import pytest
 
-from where_songs_meet.sync import (
+from lib.sync import (
     DEFAULT_PORT,
     START_DELAY_SEC,
     Room,

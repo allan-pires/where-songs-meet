@@ -4,15 +4,15 @@ import logging
 import sys
 import tkinter as tk
 
-from where_songs_meet import parse_midi, build_mcr_lines, export_mcr
-from where_songs_meet.admin import request_admin_and_restart
-from where_songs_meet.app import App
-from where_songs_meet.log_config import setup_logging
+from lib import parse_midi, build_mcr_lines, export_mcr
+from lib.admin import request_admin_and_restart
+from lib.app import App
+from lib.log_config import setup_logging
 
 
 def main():
     setup_logging()
-    log = logging.getLogger("where_songs_meet.main")
+    log = logging.getLogger("lib.main")
     request_admin_and_restart()
     root = tk.Tk()
     try:
