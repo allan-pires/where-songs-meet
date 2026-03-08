@@ -1,11 +1,11 @@
-"""Tests for lib.sync: Room, get_lan_ip, payload format."""
+"""Tests for src.sync: Room, get_lan_ip, payload format."""
 
 import base64
 import time
 
 import pytest
 
-from lib.sync import (
+from src.sync import (
     DEFAULT_PORT,
     START_DELAY_SEC,
     Room,

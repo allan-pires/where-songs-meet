@@ -1,9 +1,9 @@
-"""Tests for lib.midi: note mapping, MCR line building, export, parse."""
+"""Tests for src.midi: note mapping, MCR line building, export, parse."""
 
 import pytest
 from pathlib import Path
 
-from lib.midi import (
+from src.midi import (
     build_mcr_lines,
     export_mcr,
     map_note_to_key,

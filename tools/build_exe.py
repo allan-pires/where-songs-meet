@@ -27,8 +27,8 @@ def main():
         sys.exit(1)
 
     hidden = [
-        "--hidden-import", "lib.theme",
-        "--hidden-import", "lib.icon_images",
+        "--hidden-import", "src.theme",
+        "--hidden-import", "src.icon_images",
         "--hidden-import", "certifi",
     ]
 
