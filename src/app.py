@@ -2755,8 +2755,9 @@ del "%ME%"
         self._song_settings.set(key, self.tempo.get(), self.transpose.get())
         self.os_status.config(text='Tempo/transpose saved for this song.')
 
-    def _show_file_tracks_dialog(self, path: str, tracks: list[tuple[int, str]], on_confirm: Callable[[set[int]], None]):
-        """Show modal to select tracks (only when 2+). on_confirm(selected_set) is called when user clicks Play."""
+    def _show_file_tracks_dialog(self, path: str, tracks: list[tuple[int, str, int]], on_confirm: Callable[[set[int]], None]):
+        """Show modal to select tracks (only when 2+). on_confirm(selected_set) is called when user clicks Play.
+        tracks: (track_index, track_name, gm_program) per track."""
         norm_path = os.path.normpath(path)
         last_selected = self._file_last_tracks.get(norm_path)
         top = tk.Toplevel(self.root)
@@ -2772,7 +2773,7 @@ del "%ME%"
         vars_by_idx: dict[int, tk.BooleanVar] = {}
         cb_frame = tk.Frame(frame, bg=BG)
         cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
-        for idx, name in tracks:
+        for idx, name, _program in tracks:
             checked = (idx in last_selected) if last_selected is not None else True
             var = tk.BooleanVar(value=checked)
             vars_by_idx[idx] = var
@@ -2789,6 +2790,64 @@ del "%ME%"
                 cursor='hand2',
                 anchor='w',
             ).pack(anchor='w')
+        simplify_var = tk.BooleanVar(value=False)
+        group_frame = tk.Frame(frame, bg=BG)
+        group_vars: dict[str, tk.BooleanVar] = {}
+        if len(tracks) >= 4:
+            groups = midi.get_file_track_groups_for_tracks(tracks)
+            if groups:
+                simplify_cb = tk.Checkbutton(
+                    frame,
+                    text='Simplify by category',
+                    variable=simplify_var,
+                    font=SMALL_FONT,
+                    fg=FG,
+                    bg=BG,
+                    activeforeground=FG,
+                    activebackground=BG,
+                    selectcolor=ENTRY_BG,
+                    cursor='hand2',
+                    anchor='w',
+                )
+                simplify_cb.pack(anchor='w', pady=(0, SMALL_PAD))
+
+                def show_simplify():
+                    if simplify_var.get():
+                        cb_frame.pack_forget()
+                        group_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
+                        for gname, indices in groups:
+                            any_sel = any(vars_by_idx[i].get() for i in indices)
+                            group_vars[gname].set(any_sel)
+                    else:
+                        group_frame.pack_forget()
+                        cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
+                        for idx, _name, _prog in tracks:
+                            in_any_checked = any(
+                                group_vars[gname].get()
+                                for gname, indices in groups
+                                if idx in indices
+                            )
+                            vars_by_idx[idx].set(in_any_checked)
+
+                simplify_var.trace_add('write', lambda *_: show_simplify())
+                tk.Label(group_frame, text='Categories:', font=SMALL_FONT, fg=FG, bg=BG).pack(anchor='w')
+                for gname, indices in groups:
+                    gvar = tk.BooleanVar(value=any(vars_by_idx[i].get() for i in indices))
+                    group_vars[gname] = gvar
+                    tk.Checkbutton(
+                        group_frame,
+                        text=gname,
+                        variable=gvar,
+                        font=SMALL_FONT,
+                        fg=FG,
+                        bg=BG,
+                        activeforeground=FG,
+                        activebackground=BG,
+                        selectcolor=ENTRY_BG,
+                        cursor='hand2',
+                        anchor='w',
+                    ).pack(anchor='w')
+                group_frame.pack_forget()
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2802,6 +2861,8 @@ del "%ME%"
         )
 
         def all_tracks_selected():
+            if simplify_var.get() and group_vars:
+                return all(v.get() for v in group_vars.values())
             return all(v.get() for v in vars_by_idx.values())
 
         def update_tracks_toggle_label(*_):
@@ -2809,8 +2870,12 @@ del "%ME%"
 
         def toggle_tracks_select_all():
             select = not all_tracks_selected()
-            for v in vars_by_idx.values():
-                v.set(select)
+            if simplify_var.get() and group_vars:
+                for v in group_vars.values():
+                    v.set(select)
+            else:
+                for v in vars_by_idx.values():
+                    v.set(select)
             update_tracks_toggle_label()
 
         toggle_btn = tk.Button(
@@ -2820,9 +2885,17 @@ del "%ME%"
         toggle_btn.pack(anchor='w', pady=(0, SMALL_PAD))
         for v in vars_by_idx.values():
             v.trace_add('write', update_tracks_toggle_label)
+        for v in group_vars.values():
+            v.trace_add('write', update_tracks_toggle_label)
 
         def on_play():
-            selected = {i for i, v in vars_by_idx.items() if v.get()}
+            if simplify_var.get() and group_vars:
+                selected = set()
+                for gname, indices in midi.get_file_track_groups_for_tracks(tracks):
+                    if group_vars[gname].get():
+                        selected |= indices
+            else:
+                selected = {i for i, v in vars_by_idx.items() if v.get()}
             if not selected:
                 messagebox.showwarning('No track selected', 'Select at least one track to play.')
                 return

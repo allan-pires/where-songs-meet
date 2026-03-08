@@ -45,18 +45,57 @@ def map_note_to_key(note: int) -> tuple[list[str], str]:
     return (mods, key)
 
 
-def get_midi_track_info(path: str) -> list[tuple[int, str]]:
-    """Return list of (track_index, track_name) for each track in the MIDI file.
-    Track name is taken from the track_name meta message, or 'Track N' if missing."""
+# GM (General MIDI) program 0-127 -> category name for "simplify by category" in track picker.
+# 16 categories of 8 programs each.
+GM_CATEGORIES: list[tuple[str, set[int]]] = [
+    ("Piano", {p for p in range(0, 8)}),
+    ("Chromatic Percussion", {p for p in range(8, 16)}),
+    ("Organ", {p for p in range(16, 24)}),
+    ("Guitar", {p for p in range(24, 32)}),
+    ("Bass", {p for p in range(32, 40)}),
+    ("Strings", {p for p in range(40, 48)}),
+    ("Ensemble", {p for p in range(48, 56)}),
+    ("Brass", {p for p in range(56, 64)}),
+    ("Reed", {p for p in range(64, 72)}),
+    ("Pipe", {p for p in range(72, 80)}),
+    ("Synth Lead", {p for p in range(80, 88)}),
+    ("Synth Pad", {p for p in range(88, 96)}),
+    ("Synth Effects", {p for p in range(96, 104)}),
+    ("Ethnic", {p for p in range(104, 112)}),
+    ("Percussive", {p for p in range(112, 120)}),
+    ("Sound Effects", {p for p in range(120, 128)}),
+]
+
+
+def get_midi_track_info(path: str) -> list[tuple[int, str, int]]:
+    """Return list of (track_index, track_name, gm_program) for each track in the MIDI file.
+    Track name from track_name meta message, or 'Track N' if missing.
+    gm_program is from the first program_change message in the track, or 0 if none."""
     mid = mido.MidiFile(path)
-    result: list[tuple[int, str]] = []
+    result: list[tuple[int, str, int]] = []
     for i, track in enumerate(mid.tracks):
         name = f"Track {i}"
+        program = 0
+        found_program = False
         for msg in track:
             if msg.type == "track_name" and hasattr(msg, "name"):
                 name = msg.name or name
-                break
-        result.append((i, name))
+            if not found_program and msg.type == "program_change" and hasattr(msg, "program"):
+                program = getattr(msg, "program", 0) & 0x7F
+                found_program = True
+        result.append((i, name, program))
+    return result
+
+
+def get_file_track_groups_for_tracks(
+    tracks: list[tuple[int, str, int]],
+) -> list[tuple[str, set[int]]]:
+    """Return (category_name, set of track indices in that category) for each GM category that has at least one track."""
+    result: list[tuple[str, set[int]]] = []
+    for cat_name, programs in GM_CATEGORIES:
+        indices = {idx for idx, _name, prog in tracks if prog in programs}
+        if indices:
+            result.append((cat_name, indices))
     return result
 
 
