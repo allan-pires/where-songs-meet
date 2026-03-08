@@ -2,6 +2,10 @@
 
 Convert MIDI files to macro (.mcr) command files and play them as keyboard input in real time. Includes support for local files, **onlinesequencer.net** sequences, a playlist, and synced “play together” rooms.
 
+https://github.com/user-attachments/assets/2d31b7ef-e86d-4898-bdb0-3c005320545d
+
+
+
 ## Disclaimer
 
 **This is a third-party product.** It does not modify any game files—it only simulates keyboard input. Nevertheless, game publishers may treat any automation or third-party tools as a violation of their terms of service, and **you can still be banned** if they decide to do so. Use at your own risk. **This tool is intended for personal use only.**
