@@ -9,7 +9,7 @@ Convert MIDI files to macro (.mcr) command files and play them as keyboard input
 - **File tab** — Open a folder of .mid/.midi files and play or add to playlist
 - **Online Sequencer tab** — Browse and search onlinesequencer.net, download MIDI, add to favorites or playlist
 - **Playlist tab** — Queue songs from File or Online Sequencer and play in order
-- **Play together** — Host or join a room; when the host presses Play, everyone starts in sync
+- **Play together** — Host or join a room; when the host presses Play, everyone starts in sync. Optional **public link** (ngrok) lets friends outside your network join.
 - **Chord support** — Simultaneous key presses with correct modifier handling (Shift/Ctrl for black keys)
 - **Check for updates** — Button in the header checks GitHub releases and can open the release page or download and run the latest build
 
@@ -40,7 +40,7 @@ python main.py
 1. **File** — Choose a folder, select a MIDI file. Use **Tempo ×** and **Transpose**, then **Play** or **Add to playlist**. Optionally save tempo/transpose for the selected song.
 2. **Online Sequencer** — Load or search sequences from onlinesequencer.net. Download, play, or add to playlist; manage favorites (★).
 3. **Playlist** — Play queued songs in order. Add/remove/clear; play or stop from this tab.
-4. **Play together** — **Host**: set port and start; **Join**: enter host:port. Host selects music and presses Play; clients start in sync.
+4. **Play together** — **Host**: set port and start; **Join**: enter host:port. Host selects music and presses Play; clients start in sync. See below for playing with friends over the internet (ngrok).
 
 ### Key mappings
 
@@ -51,6 +51,25 @@ Notes are mapped by **pitch class** (note % 12) and **row by range**:
 - **High row** (72+): Q, W, E, R, T, Y, U  
 
 Notes outside 0–95 are clamped. Black keys use **Shift** (or **Ctrl** for D♯ on the low row). Use **Transpose** to shift octaves.
+
+### Playing with friends over the internet (ngrok)
+
+To let friends **not on your local network** join your room, use the built-in **public link** (ngrok TCP tunnel):
+
+1. **One-time setup**
+   - Sign up at [ngrok.com](https://ngrok.com) (free account).
+   - In the [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken), copy your **authtoken**.
+   - Set the token so the app can see it:
+     - **Option A (current session):** In PowerShell: `$env:NGROK_AUTH_TOKEN = "your-token-here"`
+     - **Option B (permanent):** Windows **Settings → System → About → Advanced system settings → Environment variables**. Under *User variables*, add `NGROK_AUTH_TOKEN` with your token. Restart the app after adding it.
+2. **When hosting**
+   - Start the room as usual (**Host** with your port).
+   - Click **Create public link**. After a few seconds, a public address appears (e.g. `0.tcp.ngrok.io:12345`).
+   - Click **Copy** and send that address to your friends.
+3. **Friends**
+   - In **Join**, paste the address (e.g. `0.tcp.ngrok.io:12345`) and connect. No VPN or being on the same LAN required.
+
+The tunnel closes when you stop hosting. Requires **pyngrok** (`pip install -r requirements.txt`).
 
 ## Important notes
 
@@ -76,8 +95,8 @@ The app may need to run as Administrator so keyboard input reaches games. Window
 - Some games block simulated input
 
 **Play together: others can’t connect?**  
-- Allow the app in Windows Firewall (Private network)  
-- Use the host’s LAN IP and the port shown (e.g. `192.168.0.1:38472`)
+- **Same network:** Allow the app in Windows Firewall (Private network) and use the host’s LAN IP and port (e.g. `192.168.0.1:38472`).  
+- **Different networks:** Use **Create public link** (ngrok) when hosting and share the generated address; friends paste it in Join. Ensure `NGROK_AUTH_TOKEN` is set (see *Playing with friends over the internet* above).
 
 **MIDI not loading?**  
 - Use valid .mid or .midi files  
@@ -92,6 +111,7 @@ The app may need to run as Administrator so keyboard input reaches games. Window
   - **`midi.py`** — Parse MIDI, map notes to keys, build .mcr lines, export  
   - **`playback.py`** — Run playback from events or file (pynput)  
   - **`sync.py`** — Room (host/join), LAN IP, play-together protocol  
+  - **`tunnel.py`** — Public link via ngrok TCP tunnel for remote join  
   - **`song_settings.py`** — Per-song tempo/transpose persistence  
   - **`os_favorites.py`** — Online Sequencer favorites persistence  
   - **`playlist.py`** — Playlist state (file/OS items, index)  

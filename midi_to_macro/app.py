@@ -32,6 +32,7 @@ from midi_to_macro.os_favorites import OsFavorites
 from midi_to_macro.playlist import Playlist
 from midi_to_macro.song_settings import SongSettings
 from midi_to_macro.sync import DEFAULT_PORT, Room, START_DELAY_SEC, get_lan_ip
+from midi_to_macro.tunnel import get_public_addr, is_available, is_tunnel_active, start_tcp_tunnel, stop_tunnel
 from midi_to_macro.firewall import add_firewall_rules
 from midi_to_macro.updater import check_for_updates, download_update, is_newer, open_release_page
 from midi_to_macro.version import __version__ as APP_VERSION
@@ -936,6 +937,35 @@ class App:
             font=HINT_FONT, fg=SUBTLE, bg=CARD, justify='left', wraplength=300
         )
         self.sync_firewall_hint.pack(anchor='w', pady=(SMALL_PAD, 0))
+        # Public link (tunnel) — label on first line, buttons/status on second line
+        tunnel_row = tk.Frame(host_inner, bg=CARD)
+        tunnel_row.pack(fill='x', pady=(SMALL_PAD, 0))
+        tk.Label(tunnel_row, text='Public link', font=LABEL_FONT, fg=FG, bg=CARD, anchor='w').pack(anchor='w')
+        tunnel_btns = tk.Frame(tunnel_row, bg=CARD)
+        tunnel_btns.pack(fill='x')
+        self.sync_create_tunnel_btn = tk.Button(
+            tunnel_btns, text='Create public link', command=self._sync_create_tunnel,
+            font=LABEL_FONT, fg=FG, bg=ENTRY_BG, activebackground=ACCENT, activeforeground=FG,
+            relief='flat', cursor='hand2', padx=BTN_PAD[0], pady=2
+        )
+        self.sync_create_tunnel_btn.pack(side='left', padx=(0, BTN_GAP))
+        self.sync_tunnel_addr_var = tk.StringVar(value='')
+        self.sync_tunnel_addr_label = tk.Label(
+            tunnel_btns, textvariable=self.sync_tunnel_addr_var,
+            font=LABEL_FONT, fg=ACCENT, bg=CARD
+        )
+        self.sync_tunnel_addr_label.pack(side='left', padx=(0, BTN_GAP))
+        self.sync_tunnel_copy_btn = tk.Button(
+            tunnel_btns, text='Copy', command=self._sync_copy_tunnel_addr,
+            font=LABEL_FONT, fg=FG, bg=ENTRY_BG, activebackground=ACCENT, activeforeground=FG,
+            relief='flat', cursor='hand2', padx=BTN_PAD[0], pady=2
+        )
+        self.sync_tunnel_copy_btn.pack(side='left', padx=(0, BTN_GAP))
+        self.sync_tunnel_status = tk.Label(
+            tunnel_btns, text='', font=HINT_FONT, fg=SUBTLE, bg=CARD
+        )
+        self.sync_tunnel_status.pack(side='left', padx=(PAD, 0))
+        self._sync_update_tunnel_ui()
         # Join block
         join_card = tk.Frame(sync_frame, bg=CARD, highlightbackground=CARD_BORDER, highlightthickness=1)
         join_card.pack(fill='x', pady=(SMALL_PAD, 0))
@@ -951,8 +981,8 @@ class App:
         )
         sync_join_entry.pack(side='left', fill='x', expand=True, padx=(0, BTN_GAP))
         join_hint = tk.Label(
-            join_inner, text='e.g. 192.168.0.1:38472',
-            font=HINT_FONT, fg=SUBTLE, bg=CARD
+            join_inner, text='e.g. 192.168.0.1:38472 or host\'s public link (e.g. 0.tcp.ngrok.io:12345)',
+            font=HINT_FONT, fg=SUBTLE, bg=CARD, wraplength=320
         )
         join_hint.pack(anchor='w', pady=(2, SMALL_PAD))
         join_btns = tk.Frame(join_inner, bg=CARD)
@@ -972,10 +1002,10 @@ class App:
         self.sync_disconnect_btn.bind('<Enter>', lambda e: self.sync_disconnect_btn.configure(bg=ACCENT))
         self.sync_disconnect_btn.bind('<Leave>', lambda e: self.sync_disconnect_btn.configure(bg=CARD))
         self.sync_status = tk.Label(
-            join_btns, text='Not connected.',
+            join_inner, text='Not connected.',
             font=SMALL_FONT, fg=SUBTLE, bg=CARD
         )
-        self.sync_status.pack(side='left', padx=(PAD, 0))
+        self.sync_status.pack(anchor='w', pady=(SMALL_PAD, 0))
         _tooltip(self.sync_host_btn, sync_host_tooltip, 'Start hosting')
         _tooltip(self.sync_stop_host_btn, sync_host_tooltip, 'Stop hosting')
         _tooltip(self.sync_join_btn, self.sync_status, 'Connect')
@@ -1333,6 +1363,7 @@ del "%ME%"
         self._sync_report_selection()  # show initial selection (or "(select a song)")
         self._sync_last_participant_count = 0
         self._sync_update_host_status(0)
+        self._sync_update_tunnel_ui()
 
     def _sync_stop_host(self):
         log.info("Stopping host")
@@ -1347,6 +1378,69 @@ del "%ME%"
         self.sync_play_my_cb.pack(anchor='w')
         self.sync_status.config(text='Not connected.')
         self._sync_update_now_playing([])
+        if is_tunnel_active():
+            stop_tunnel()
+        self._sync_update_tunnel_ui()
+
+    def _sync_create_tunnel(self):
+        """Create public link via ngrok TCP tunnel (runs in thread)."""
+        if not self._room.is_host():
+            return
+        s = self.sync_host_var.get().strip()
+        if ':' not in s:
+            return
+        try:
+            port = int(s.rsplit(':', 1)[1].strip())
+        except ValueError:
+            return
+        self.sync_create_tunnel_btn.config(state='disabled')
+        self.sync_tunnel_status.config(text='Creating tunnel…')
+
+        def do_start():
+            ok, addr, err = start_tcp_tunnel(port)
+            self.root.after(0, lambda: self._sync_on_tunnel_created(ok, addr, err))
+
+        threading.Thread(target=do_start, daemon=True).start()
+
+    def _sync_on_tunnel_created(self, ok: bool, addr: str, err: str):
+        self.sync_create_tunnel_btn.config(state='normal' if self._room.is_host() else 'disabled')
+        if ok:
+            self.sync_tunnel_addr_var.set(addr)
+            self.sync_tunnel_status.config(text='Friends can join at this address.')
+            self._sync_update_tunnel_ui()
+        else:
+            self.sync_tunnel_status.config(text=err or 'Tunnel failed.')
+            self._sync_update_tunnel_ui()
+
+    def _sync_copy_tunnel_addr(self):
+        addr = get_public_addr()
+        if not addr:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(addr)
+        self.sync_tunnel_status.config(text='Copied to clipboard.')
+        self.root.after(2000, lambda: self._sync_update_tunnel_ui())
+
+    def _sync_update_tunnel_ui(self):
+        """Show/hide Create public link vs tunnel address + Copy/Close based on state."""
+        hosting = self._room.is_host()
+        active = is_tunnel_active()
+        if active:
+            self.sync_tunnel_addr_var.set(get_public_addr() or '')
+            self.sync_tunnel_addr_label.pack(side='left', padx=(0, BTN_GAP))
+            self.sync_tunnel_copy_btn.pack(side='left', padx=(0, BTN_GAP))
+            self.sync_create_tunnel_btn.pack_forget()
+            self.sync_tunnel_status.config(text='Friends can join at this address.')
+        else:
+            self.sync_create_tunnel_btn.pack(side='left', padx=(0, BTN_GAP))
+            self.sync_tunnel_addr_label.pack_forget()
+            self.sync_tunnel_copy_btn.pack_forget()
+            self.sync_create_tunnel_btn.config(state='normal' if hosting else 'disabled')
+            if hosting:
+                ok, reason = is_available()
+                self.sync_tunnel_status.config(text=reason if not ok else 'Share this with friends outside your network.')
+            else:
+                self.sync_tunnel_status.config(text='Start hosting first.')
 
     def _sync_join(self):
         # Ask to allow the app through the firewall (private and public) for joining/hosting

@@ -85,6 +85,19 @@ OS_INSTRUMENT_NAMES: dict[int, str] = {
     62: "Rhodes",
 }
 
+# Instruments that only play a single note or behave badly; collapse into the primary variant for display.
+# Map: redundant_id -> primary_id. Notes from both are included when the user selects the primary.
+INSTRUMENT_REDUNDANT_TO_PRIMARY: dict[int, int] = {
+    0: 43,   # Electric Piano (Classic) -> Electric Piano
+}
+
+# When both instruments are in the sequence, only show the primary; selecting it includes the other's notes.
+# (primary_id, redundant_id): hide redundant when both present; when primary selected, include redundant in filter.
+INSTRUMENT_HIDE_WHEN_BOTH_PRESENT: list[tuple[int, int]] = [
+    (41, 43),   # Grand Piano + Electric Piano: show only Grand Piano (Electric Piano often plays one note and stops)
+    (43, 1),    # Electric Piano + Acoustic Guitar (Classic): show only Electric Piano (classic often one note and stops)
+]
+
 
 def _note_type_index_to_midi(index: int) -> int:
     """Convert OS note type index (0-71) to MIDI note number. k=0 -> B7=107, k=71 -> C2=36."""
@@ -264,14 +277,39 @@ def get_sequence_instrument_name(inst_id: int) -> str:
     return OS_INSTRUMENT_NAMES.get(inst_id, f"Instrument {inst_id}")
 
 
+def _instrument_to_primary(inst_id: int) -> int:
+    """Return the primary instrument ID; redundant (e.g. classic) variants map to the main one."""
+    return INSTRUMENT_REDUNDANT_TO_PRIMARY.get(inst_id, inst_id)
+
+
+def _expand_instrument_ids_for_filter(instrument_ids: set[int]) -> set[int]:
+    """Expand selected IDs so that notes from redundant variants and hide-when-both partners are included."""
+    out = set(instrument_ids)
+    for redundant, primary in INSTRUMENT_REDUNDANT_TO_PRIMARY.items():
+        if primary in instrument_ids:
+            out.add(redundant)
+    for primary, redundant in INSTRUMENT_HIDE_WHEN_BOTH_PRESENT:
+        if primary in instrument_ids:
+            out.add(redundant)
+    return out
+
+
 def get_sequence_instruments(binary: bytes) -> list[tuple[int, str]]:
     """Return list of (instrument_id, display_name) for all instruments used in the sequence.
-    Sorted by instrument id; display name uses OS instrument names when known."""
+    Redundant variants (e.g. Electric Piano (Classic)) are collapsed into the primary.
+    When both instruments in a hide-when-both pair are present (e.g. Grand Piano + Electric Piano),
+    only the primary is shown; selecting it includes notes from both."""
     notes = _parse_sequence_notes(binary)
     ids: set[int] = set()
     for n in notes:
         ids.add(n.get("instrument", 0))
-    return [(i, get_sequence_instrument_name(i)) for i in sorted(ids)]
+    # Unconditional collapse: map redundants to primary
+    display = {_instrument_to_primary(i) for i in ids}
+    # When both primary and redundant in sequence, hide redundant
+    for primary, redundant in INSTRUMENT_HIDE_WHEN_BOTH_PRESENT:
+        if primary in display and redundant in display:
+            display.discard(redundant)
+    return [(i, get_sequence_instrument_name(i)) for i in sorted(display)]
 
 
 def _parse_sequence_notes(data: bytes) -> list[dict[str, Any]]:
@@ -366,7 +404,8 @@ def sequence_binary_to_midi(
     if not notes:
         raise ValueError("No notes found in sequence data")
     if instrument_ids is not None:
-        notes = [n for n in notes if n.get("instrument", 0) in instrument_ids]
+        expanded = _expand_instrument_ids_for_filter(instrument_ids)
+        notes = [n for n in notes if n.get("instrument", 0) in expanded]
         if not notes:
             raise ValueError("No notes left after filtering by selected instruments")
 
