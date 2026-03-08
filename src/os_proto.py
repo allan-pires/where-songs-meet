@@ -98,6 +98,32 @@ INSTRUMENT_HIDE_WHEN_BOTH_PRESENT: list[tuple[int, int]] = [
     (43, 1),    # Electric Piano + Acoustic Guitar (Classic): show only Electric Piano (classic often one note and stops)
 ]
 
+# Groups for "simplify by category" when there are many instruments. Each group name maps to instrument IDs in that category.
+INSTRUMENT_GROUPS: dict[str, list[int]] = {
+    "Strings": [11, 12, 20, 45, 46, 47],  # Violin, Cello, Pizzicato, Strings
+    "Pianos": [0, 8, 17, 25, 26, 41, 43, 62],  # Electric Piano (Classic), Grand Piano, Harpsichord, Ragtime, Music Box, Electric Piano, Rhodes
+    "Guitars": [1, 4, 32, 35, 38, 44, 49, 58],  # Acoustic, Electric, Jazz, Muted, Distortion, Clean
+    "Bass": [5, 27, 29, 37, 48, 54, 56],  # Bass Guitar, Synth Bass, Slap, 808 Bass, Bass
+    "Drums": [2, 31, 36, 39, 40, 42, 53, 60],  # Drum kits
+    "Brass": [9, 10, 50, 51, 61],  # French Horn, Trombone, Brass
+    "Synths": [3, 6, 7, 30, 52, 55, 57],  # Smooth, Synth Pluck, Scifi, Pop Synth, Synthesizer
+    "8-Bit": [13, 14, 15, 16, 39],  # 8-Bit Sine/Square/Sawtooth/Triangle, 8-Bit Drum
+    "Other": [18, 19, 21, 22, 23, 24, 28, 33, 34, 59],  # Harp, Xylophone, Steel Drums, Sitar, Flute, Sax, Organ, Koto, Vibraphone, Choir
+}
+
+
+def get_instrument_groups_for_sequence(
+    sequence_instrument_ids: set[int] | list[int],
+) -> list[tuple[str, set[int]]]:
+    """Return (group_name, set of inst ids in sequence that belong to group) for each group that has at least one."""
+    ids = set(sequence_instrument_ids)
+    result: list[tuple[str, set[int]]] = []
+    for group_name, group_ids in INSTRUMENT_GROUPS.items():
+        in_sequence = ids & set(group_ids)
+        if in_sequence:
+            result.append((group_name, in_sequence))
+    return result
+
 
 def _note_type_index_to_midi(index: int) -> int:
     """Convert OS note type index (0-71) to MIDI note number. k=0 -> B7=107, k=71 -> C2=36."""

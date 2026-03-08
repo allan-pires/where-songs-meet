@@ -4,21 +4,44 @@ import json
 import os
 
 
+# Legacy config dir names (e.g. from older app names); checked if primary path has no file.
+_LEGACY_CONFIG_DIRS = (".midi_to_macro", ".where_songs_meet")
+
+
+def _user_config_dir(settings_dir: str) -> str:
+    return settings_dir or os.path.join(os.path.expanduser("~"), ".where_songs_meet")
+
+
 class OsFavorites:
     """Load/save list of (sequence_id, title) for onlinesequencer.net."""
 
     def __init__(self, settings_dir: str = ""):
-        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".where_songs_meet")
+        self._dir = _user_config_dir(settings_dir)
         self._path = os.path.join(self._dir, "os_favorites.json")
         self._list: list[tuple[str, str]] = []
         self.load()
 
     def load(self) -> None:
         self._list = []
-        if not self._path or not os.path.isfile(self._path):
+        # Try primary path first
+        if self._path and os.path.isfile(self._path):
+            self._load_from_path(self._path)
             return
+        # Fallback: load from legacy config dirs (e.g. .midi_to_macro) and migrate
+        base = os.path.expanduser("~")
+        for legacy_dir in _LEGACY_CONFIG_DIRS:
+            if legacy_dir == os.path.basename(self._dir):
+                continue
+            legacy_path = os.path.join(base, legacy_dir, "os_favorites.json")
+            if os.path.isfile(legacy_path):
+                self._load_from_path(legacy_path)
+                if self._list:
+                    self.save()
+                return
+
+    def _load_from_path(self, path: str) -> None:
         try:
-            with open(self._path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict) and isinstance(data.get("favorites"), list):
                 for item in data["favorites"]:

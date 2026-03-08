@@ -25,6 +25,7 @@ from src.online_sequencer import (
 )
 from src.os_proto import (
     fetch_sequence_binary,
+    get_instrument_groups_for_sequence,
     get_sequence_instruments,
     sequence_binary_to_midi,
 )
@@ -1140,6 +1141,82 @@ class App:
                 w.bind('<B1-Motion>', _on_header_drag)
                 w.bind('<ButtonRelease-1>', _on_header_release)
                 w.configure(cursor='fleur')
+            # Resize handles on the visible border (BORDER_WIDTH = 5)
+            RESIZE_HANDLE = 5
+            MIN_W = 360 + 2 * RESIZE_HANDLE
+            MIN_H = 520 + 2 * RESIZE_HANDLE
+            self._resize_start: tuple[int, int, int, int, int, int, str] | None = None  # x_root, y_root, x, y, w, h, edge
+
+            def _start_resize(e, edge: str):
+                self._resize_start = (
+                    e.x_root, e.y_root,
+                    root.winfo_x(), root.winfo_y(),
+                    root.winfo_width(), root.winfo_height(),
+                    edge,
+                )
+
+            def _on_resize_drag(e):
+                if not self._resize_start:
+                    return
+                x_root0, y_root0, x0, y0, w0, h0, edge = self._resize_start
+                dx = e.x_root - x_root0
+                dy = e.y_root - y_root0
+                x, y, w, h = x0, y0, w0, h0
+                if 'e' in edge:
+                    w = max(MIN_W, w0 + dx)
+                if 'w' in edge:
+                    dw = min(0, max(-(w0 - MIN_W), dx))
+                    w = w0 + dw
+                    x = x0 - dw
+                if 's' in edge:
+                    h = max(MIN_H, h0 + dy)
+                if 'n' in edge:
+                    dh = min(0, max(-(h0 - MIN_H), dy))
+                    h = h0 + dh
+                    y = y0 - dh
+                root.geometry(f'{w}x{h}+{x}+{y}')
+
+            def _end_resize(_e):
+                self._resize_start = None
+
+            # Place edge/corner handles (content is packed with padx=pady=RESIZE_HANDLE)
+            root.update_idletasks()
+            # left edge
+            left_f = tk.Frame(root, bg=BORDER, cursor='size_we', width=RESIZE_HANDLE)
+            left_f.place(x=0, y=0, width=RESIZE_HANDLE, relheight=1)
+            left_f.bind('<Button-1>', lambda e: _start_resize(e, 'w'))
+            left_f.bind('<B1-Motion>', _on_resize_drag)
+            left_f.bind('<ButtonRelease-1>', _end_resize)
+            # right edge
+            right_f = tk.Frame(root, bg=BORDER, cursor='size_we', width=RESIZE_HANDLE)
+            right_f.place(relx=1, x=-RESIZE_HANDLE, y=0, width=RESIZE_HANDLE, relheight=1)
+            right_f.bind('<Button-1>', lambda e: _start_resize(e, 'e'))
+            right_f.bind('<B1-Motion>', _on_resize_drag)
+            right_f.bind('<ButtonRelease-1>', _end_resize)
+            # top edge
+            top_f = tk.Frame(root, bg=BORDER, cursor='size_ns', height=RESIZE_HANDLE)
+            top_f.place(x=0, y=0, relwidth=1, height=RESIZE_HANDLE)
+            top_f.bind('<Button-1>', lambda e: _start_resize(e, 'n'))
+            top_f.bind('<B1-Motion>', _on_resize_drag)
+            top_f.bind('<ButtonRelease-1>', _end_resize)
+            # bottom edge
+            bottom_f = tk.Frame(root, bg=BORDER, cursor='size_ns', height=RESIZE_HANDLE)
+            bottom_f.place(x=0, rely=1, y=-RESIZE_HANDLE, relwidth=1, height=RESIZE_HANDLE)
+            bottom_f.bind('<Button-1>', lambda e: _start_resize(e, 's'))
+            bottom_f.bind('<B1-Motion>', _on_resize_drag)
+            bottom_f.bind('<ButtonRelease-1>', _end_resize)
+            # corners
+            for _relx, _rely, _x, _y, _edge, _cur in (
+                (0, 0, 0, 0, 'nw', 'size_nw_se'), (1, 0, -RESIZE_HANDLE, 0, 'ne', 'size_ne_sw'),
+                (0, 1, 0, -RESIZE_HANDLE, 'sw', 'size_ne_sw'), (1, 1, -RESIZE_HANDLE, -RESIZE_HANDLE, 'se', 'size_nw_se'),
+            ):
+                cf = tk.Frame(root, bg=BORDER, cursor=_cur, width=RESIZE_HANDLE, height=RESIZE_HANDLE)
+                cf.place(relx=_relx, rely=_rely, x=_x, y=_y, width=RESIZE_HANDLE, height=RESIZE_HANDLE)
+                cf.bind('<Button-1>', lambda e, edge=_edge: _start_resize(e, edge))
+                cf.bind('<B1-Motion>', _on_resize_drag)
+                cf.bind('<ButtonRelease-1>', _end_resize)
+            # End resize on release anywhere (in case user drags outside the handle)
+            root.bind('<ButtonRelease-1>', lambda e: _end_resize(e) if self._resize_start else None)
             root.overrideredirect(True)
 
     def _sync_register_room_callbacks(self):
@@ -1981,6 +2058,7 @@ del "%ME%"
             frame, text='Select which instruments to include:', font=LABEL_FONT, fg=FG, bg=BG
         ).pack(anchor='w')
         last_selected = self._os_last_instruments.get(sid)
+        sequence_ids = {inst_id for inst_id, _ in instruments}
         vars_by_id: dict[int, tk.BooleanVar] = {}
         cb_frame = tk.Frame(frame, bg=BG)
         cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
@@ -2002,6 +2080,64 @@ del "%ME%"
                 cursor='hand2',
                 anchor='w',
             ).pack(anchor='w')
+        simplify_var = tk.BooleanVar(value=False)
+        group_frame = tk.Frame(frame, bg=BG)
+        group_vars: dict[str, tk.BooleanVar] = {}
+        if len(instruments) >= 4:
+            groups = get_instrument_groups_for_sequence(sequence_ids)
+            if groups:
+                simplify_cb = tk.Checkbutton(
+                    frame,
+                    text='Simplify by category',
+                    variable=simplify_var,
+                    font=SMALL_FONT,
+                    fg=FG,
+                    bg=BG,
+                    activeforeground=FG,
+                    activebackground=BG,
+                    selectcolor=ENTRY_BG,
+                    cursor='hand2',
+                    anchor='w',
+                )
+                simplify_cb.pack(anchor='w', pady=(0, SMALL_PAD))
+
+                def show_simplify():
+                    if simplify_var.get():
+                        cb_frame.pack_forget()
+                        group_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
+                        for gname, gids in groups:
+                            any_sel = any(vars_by_id[i].get() for i in gids)
+                            group_vars[gname].set(any_sel)
+                    else:
+                        group_frame.pack_forget()
+                        cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
+                        for inst_id, var in vars_by_id.items():
+                            in_any_checked = any(
+                                group_vars[gname].get()
+                                for gname, gids in groups
+                                if inst_id in gids
+                            )
+                            var.set(in_any_checked)
+
+                simplify_var.trace_add('write', lambda *_: show_simplify())
+                tk.Label(group_frame, text='Categories:', font=SMALL_FONT, fg=FG, bg=BG).pack(anchor='w')
+                for gname, gids in groups:
+                    gvar = tk.BooleanVar(value=any(vars_by_id[i].get() for i in gids))
+                    group_vars[gname] = gvar
+                    tk.Checkbutton(
+                        group_frame,
+                        text=gname,
+                        variable=gvar,
+                        font=SMALL_FONT,
+                        fg=FG,
+                        bg=BG,
+                        activeforeground=FG,
+                        activebackground=BG,
+                        selectcolor=ENTRY_BG,
+                        cursor='hand2',
+                        anchor='w',
+                    ).pack(anchor='w')
+                group_frame.pack_forget()
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2015,6 +2151,8 @@ del "%ME%"
         )
 
         def all_selected():
+            if simplify_var.get() and group_vars:
+                return all(v.get() for v in group_vars.values())
             return all(v.get() for v in vars_by_id.values())
 
         def update_toggle_label(*_):
@@ -2022,8 +2160,12 @@ del "%ME%"
 
         def toggle_select_all():
             select = not all_selected()
-            for v in vars_by_id.values():
-                v.set(select)
+            if simplify_var.get() and group_vars:
+                for v in group_vars.values():
+                    v.set(select)
+            else:
+                for v in vars_by_id.values():
+                    v.set(select)
             update_toggle_label()
 
         toggle_btn = tk.Button(
@@ -2033,9 +2175,17 @@ del "%ME%"
         toggle_btn.pack(anchor='w', pady=(0, SMALL_PAD))
         for v in vars_by_id.values():
             v.trace_add('write', update_toggle_label)
+        for v in group_vars.values():
+            v.trace_add('write', update_toggle_label)
 
         def on_play():
-            selected = {i for i, v in vars_by_id.items() if v.get()}
+            if simplify_var.get() and group_vars:
+                selected = set()
+                for gname, gids in get_instrument_groups_for_sequence(sequence_ids):
+                    if group_vars[gname].get():
+                        selected |= gids
+            else:
+                selected = {i for i, v in vars_by_id.items() if v.get()}
             if not selected:
                 messagebox.showwarning('No instrument selected', 'Select at least one instrument.')
                 return
@@ -2081,14 +2231,22 @@ del "%ME%"
             text='Assign at least one instrument to each participant. Same instrument can be assigned to multiple people.',
             font=SMALL_FONT, fg=FG, bg=BG, wraplength=400, justify='left',
         ).pack(anchor='w')
+        sequence_ids = {inst_id for inst_id, _ in instruments}
+        groups = get_instrument_groups_for_sequence(sequence_ids) if len(instruments) >= 4 else []
+        simplify_var = tk.BooleanVar(value=False)
         # participant_index -> { inst_id -> BooleanVar }
         vars_by_participant: list[dict[int, tk.BooleanVar]] = []
+        # when simplify: participant_index -> { group_name -> BooleanVar }; and inner / inner_group frames per row
+        group_vars_by_participant: list[dict[str, tk.BooleanVar]] = []
+        inner_frames: list[tk.Frame] = []
+        inner_group_frames: list[tk.Frame] = []
         last_sync = self._os_last_sync_assignments.get(sid)  # list of sets per participant, or None
         for p_idx, p_name in enumerate(participant_names):
             row_frame = tk.LabelFrame(frame, text=f'  {p_name}  ', font=SMALL_FONT, fg=SUBTLE, bg=CARD, labelanchor='n')
             row_frame.pack(fill='x', pady=(SMALL_PAD, 0))
             inner = tk.Frame(row_frame, bg=CARD)
             inner.pack(fill='x', padx=SMALL_PAD, pady=(2, SMALL_PAD))
+            inner_frames.append(inner)
             vars_by_id: dict[int, tk.BooleanVar] = {}
             part_set = last_sync[p_idx] if last_sync and p_idx < len(last_sync) else None
             for inst_id, name in instruments:
@@ -2112,6 +2270,65 @@ del "%ME%"
                     anchor='w',
                 ).pack(side='left', padx=(0, PAD))
             vars_by_participant.append(vars_by_id)
+            gvars: dict[str, tk.BooleanVar] = {}
+            if groups:
+                inner_group = tk.Frame(row_frame, bg=CARD)
+                inner_group_frames.append(inner_group)
+                for gname, gids in groups:
+                    any_sel = any(vars_by_id[i].get() for i in gids)
+                    gvar = tk.BooleanVar(value=any_sel)
+                    gvars[gname] = gvar
+                    tk.Checkbutton(
+                        inner_group,
+                        text=gname,
+                        variable=gvar,
+                        font=SMALL_FONT,
+                        fg=FG,
+                        bg=CARD,
+                        activeforeground=FG,
+                        activebackground=CARD,
+                        selectcolor=ENTRY_BG,
+                        cursor='hand2',
+                        anchor='w',
+                    ).pack(side='left', padx=(0, PAD))
+                group_vars_by_participant.append(gvars)
+            else:
+                inner_group_frames.append(tk.Frame(row_frame, bg=CARD))
+        if groups:
+            def show_sync_simplify():
+                if simplify_var.get():
+                    for inner, inner_group in zip(inner_frames, inner_group_frames):
+                        inner.pack_forget()
+                        inner_group.pack(fill='x', padx=SMALL_PAD, pady=(2, SMALL_PAD))
+                    for p_idx, gvars in enumerate(group_vars_by_participant):
+                        for gname, gids in groups:
+                            any_sel = any(vars_by_participant[p_idx][i].get() for i in gids)
+                            gvars[gname].set(any_sel)
+                else:
+                    for inner, inner_group in zip(inner_frames, inner_group_frames):
+                        inner_group.pack_forget()
+                        inner.pack(fill='x', padx=SMALL_PAD, pady=(2, SMALL_PAD))
+                    for p_idx, gvars in enumerate(group_vars_by_participant):
+                        for inst_id, var in vars_by_participant[p_idx].items():
+                            in_any_checked = any(
+                                gvars[gname].get() for gname, gids in groups if inst_id in gids
+                            )
+                            var.set(in_any_checked)
+            simplify_cb = tk.Checkbutton(
+                frame,
+                text='Simplify by category',
+                variable=simplify_var,
+                font=SMALL_FONT,
+                fg=FG,
+                bg=BG,
+                activeforeground=FG,
+                activebackground=BG,
+                selectcolor=ENTRY_BG,
+                cursor='hand2',
+                anchor='w',
+            )
+            simplify_cb.pack(anchor='w', pady=(SMALL_PAD, 0))
+            simplify_var.trace_add('write', lambda *_: show_sync_simplify())
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2125,6 +2342,10 @@ del "%ME%"
         )
 
         def all_sync_selected():
+            if simplify_var.get() and group_vars_by_participant:
+                return all(
+                    v.get() for gvars in group_vars_by_participant for v in gvars.values()
+                )
             return all(v.get() for vars_by_id in vars_by_participant for v in vars_by_id.values())
 
         def update_sync_toggle_label(*_):
@@ -2132,9 +2353,14 @@ del "%ME%"
 
         def toggle_sync_select_all():
             select = not all_sync_selected()
-            for vars_by_id in vars_by_participant:
-                for v in vars_by_id.values():
-                    v.set(select)
+            if simplify_var.get() and group_vars_by_participant:
+                for gvars in group_vars_by_participant:
+                    for v in gvars.values():
+                        v.set(select)
+            else:
+                for vars_by_id in vars_by_participant:
+                    for v in vars_by_id.values():
+                        v.set(select)
             update_sync_toggle_label()
 
         toggle_btn = tk.Button(
@@ -2145,12 +2371,23 @@ del "%ME%"
         for vars_by_id in vars_by_participant:
             for v in vars_by_id.values():
                 v.trace_add('write', update_sync_toggle_label)
+        for gvars in group_vars_by_participant:
+            for v in gvars.values():
+                v.trace_add('write', update_sync_toggle_label)
 
         def on_play():
             selections: list[set[int]] = []
-            for vars_by_id in vars_by_participant:
-                sel = {i for i, v in vars_by_id.items() if v.get()}
-                selections.append(sel)
+            if simplify_var.get() and group_vars_by_participant:
+                for gvars in group_vars_by_participant:
+                    sel = set()
+                    for gname, gids in groups:
+                        if gvars[gname].get():
+                            sel |= gids
+                    selections.append(sel)
+            else:
+                for vars_by_id in vars_by_participant:
+                    sel = {i for i, v in vars_by_id.items() if v.get()}
+                    selections.append(sel)
             for i, sel in enumerate(selections):
                 if not sel:
                     messagebox.showwarning(
