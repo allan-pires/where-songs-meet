@@ -23,6 +23,24 @@ Also: this project is messy; it was full vibe coded. 🎹
 - **Chord support** — Simultaneous key presses with correct modifier handling (Shift/Ctrl for black keys)
 - **Check for updates** — Button in the header checks GitHub releases and can open the release page or download and run the latest build
 
+## Download and run (no coding required)
+
+If you just want to use the program on Windows and don’t use GitHub or code:
+
+1. **Open the latest release**  
+   Go to: **[Latest release](https://github.com/allan-pires/where-songs-meet/releases/latest)**. (That link always points to the newest version.)
+
+2. **Download the program**  
+   On that page, scroll to **Assets**. Click **`where-songs-meet.exe`** to download it to your computer (e.g. to your Downloads folder).
+
+3. **Run it**  
+   Double‑click `where-songs-meet.exe`. If Windows asks “Do you want to allow this app to make changes to your device?”, choose **Yes** so the app can send keyboard input (needed for games).
+
+4. **That’s it**  
+   The app window opens. Use the **File** or **Online Sequencer** tab to pick a song, then **Play**. For more, see [Usage](#usage) and the rest of this README.
+
+You don’t need to install Python or anything else—the `.exe` is a standalone program.
+
 ## Installation
 
 ### From source
