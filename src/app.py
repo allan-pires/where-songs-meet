@@ -1055,17 +1055,26 @@ class App:
             MIN_W = 360 + 2 * RESIZE_HANDLE
             MIN_H = 520 + 2 * RESIZE_HANDLE
             self._resize_start: tuple[int, int, int, int, int, int, str] | None = None  # x_root, y_root, x, y, w, h, edge
+            self._resize_overlay: tk.Toplevel | None = None  # rubber-band: only this moves during drag; root resizes once on release
+            self._resize_pending: tuple[int, int, int, int] | None = None  # w, h, x, y (last computed for release)
 
             def _start_resize(e, edge: str):
-                self._resize_start = (
-                    e.x_root, e.y_root,
-                    root.winfo_x(), root.winfo_y(),
-                    root.winfo_width(), root.winfo_height(),
-                    edge,
-                )
+                x0, y0 = root.winfo_x(), root.winfo_y()
+                w0, h0 = root.winfo_width(), root.winfo_height()
+                self._resize_start = (e.x_root, e.y_root, x0, y0, w0, h0, edge)
+                self._resize_pending = (w0, h0, x0, y0)
+                # Rubber-band overlay: resize only this during drag; root stays fixed so no layout stutter
+                self._resize_overlay = tk.Toplevel(root)
+                self._resize_overlay.overrideredirect(True)
+                self._resize_overlay.attributes('-topmost', True)
+                self._resize_overlay.configure(bg=BORDER)
+                self._resize_overlay.geometry(f'{w0}x{h0}+{x0}+{y0}')
+                self._resize_overlay.bind('<B1-Motion>', _on_resize_drag)
+                self._resize_overlay.bind('<ButtonRelease-1>', _end_resize)
+                root.bind('<B1-Motion>', _on_resize_drag)  # receive motion even when cursor leaves overlay
 
             def _on_resize_drag(e):
-                if not self._resize_start:
+                if not self._resize_start or not self._resize_overlay:
                     return
                 x_root0, y_root0, x0, y0, w0, h0, edge = self._resize_start
                 dx = e.x_root - x_root0
@@ -1083,9 +1092,21 @@ class App:
                     dh = min(0, max(-(h0 - MIN_H), dy))
                     h = h0 + dh
                     y = y0 - dh
-                root.geometry(f'{w}x{h}+{x}+{y}')
+                self._resize_pending = (w, h, x, y)
+                self._resize_overlay.geometry(f'{w}x{h}+{x}+{y}')
 
             def _end_resize(_e):
+                root.unbind('<B1-Motion>')
+                if self._resize_overlay:
+                    try:
+                        self._resize_overlay.destroy()
+                    except tk.TclError:
+                        pass
+                    self._resize_overlay = None
+                if self._resize_pending is not None:
+                    w, h, x, y = self._resize_pending
+                    self._resize_pending = None
+                    root.geometry(f'{w}x{h}+{x}+{y}')
                 self._resize_start = None
 
             # Place edge/corner handles (content is packed with padx=pady=RESIZE_HANDLE)
