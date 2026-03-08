@@ -108,6 +108,8 @@ class App:
     def __init__(self, root, borderless: bool = True):
         self.root = root
         self._borderless = borderless
+        if borderless:
+            root.overrideredirect(True)  # set before window is ever shown to avoid title-bar flash
         root.title('Where Songs Meet')
         root.attributes('-topmost', True)
         self.playing = False
@@ -1124,7 +1126,6 @@ class App:
                 cf.bind('<ButtonRelease-1>', _end_resize)
             # End resize on release anywhere (in case user drags outside the handle)
             root.bind('<ButtonRelease-1>', lambda e: _end_resize(e) if self._resize_start else None)
-            root.overrideredirect(True)
 
         # Load last file folder on startup if saved
         self._load_last_file_folder()
