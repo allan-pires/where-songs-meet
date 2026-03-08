@@ -45,25 +45,14 @@ def map_note_to_key(note: int) -> tuple[list[str], str]:
     return (mods, key)
 
 
-# GM (General MIDI) program 0-127 -> category name for "simplify by category" in track picker.
-# 16 categories of 8 programs each.
+# GM (General MIDI) program 0-127 -> broad category for "simplify by category" in track picker (6 groups).
 GM_CATEGORIES: list[tuple[str, set[int]]] = [
-    ("Piano", {p for p in range(0, 8)}),
-    ("Chromatic Percussion", {p for p in range(8, 16)}),
-    ("Organ", {p for p in range(16, 24)}),
-    ("Guitar", {p for p in range(24, 32)}),
-    ("Bass", {p for p in range(32, 40)}),
-    ("Strings", {p for p in range(40, 48)}),
-    ("Ensemble", {p for p in range(48, 56)}),
-    ("Brass", {p for p in range(56, 64)}),
-    ("Reed", {p for p in range(64, 72)}),
-    ("Pipe", {p for p in range(72, 80)}),
-    ("Synth Lead", {p for p in range(80, 88)}),
-    ("Synth Pad", {p for p in range(88, 96)}),
-    ("Synth Effects", {p for p in range(96, 104)}),
-    ("Ethnic", {p for p in range(104, 112)}),
-    ("Percussive", {p for p in range(112, 120)}),
-    ("Sound Effects", {p for p in range(120, 128)}),
+    ("Keys", {p for p in range(0, 24)}),           # Piano, Chromatic Percussion, Organ
+    ("Guitar & Bass", {p for p in range(24, 40)}),
+    ("Strings", {p for p in range(40, 56)}),      # Strings, Ensemble
+    ("Brass & Winds", {p for p in range(56, 80)}),  # Brass, Reed, Pipe
+    ("Synths", {p for p in range(80, 104)}),      # Synth Lead, Pad, Effects
+    ("Other", {p for p in range(104, 128)}),      # Ethnic, Percussive, Sound Effects
 ]
 
 

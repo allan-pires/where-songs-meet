@@ -1,5 +1,6 @@
 """Tkinter GUI application."""
 
+import json
 import logging
 from typing import Callable
 import os
@@ -289,7 +290,9 @@ class App:
         self._last_tab_visited: str = 'file'  # 'file' or 'os'
         self._os_last_instruments: dict[str, set[int]] = {}  # sid -> last selected instrument ids (in-memory only)
         self._os_last_sync_assignments: dict[str, list[set[int]]] = {}  # sid -> [host_set, p1_set, p2_set, ...] per participant
+        self._os_simplify_by_category: bool = True  # remember "Simplify by category" for OS dialogs (default on when available)
         self._file_last_tracks: dict[str, set[int]] = {}  # path -> last selected track indices (in-memory only)
+        self._file_simplify_by_category: bool = True  # remember "Simplify by category" for File track dialog (default on when available)
 
         self._song_settings = SongSettings()
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
@@ -1219,6 +1222,63 @@ class App:
             root.bind('<ButtonRelease-1>', lambda e: _end_resize(e) if self._resize_start else None)
             root.overrideredirect(True)
 
+        # Load last file folder on startup if saved
+        self._load_last_file_folder()
+
+    def _prefs_path(self) -> str:
+        return os.path.join(self._song_settings.settings_dir, "prefs.json")
+
+    def _load_last_file_folder(self) -> None:
+        """If a last file folder was saved and still exists, load it and populate the file list."""
+        path = self._prefs_path()
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            folder = data.get("last_file_folder") if isinstance(data, dict) else None
+            if not folder or not isinstance(folder, str) or not os.path.isdir(folder):
+                return
+        except (json.JSONDecodeError, OSError):
+            return
+        self.folder_path = folder
+        self.folder_label.config(text=folder[:60] + '...' if len(folder) > 60 else folder)
+        self.file_listbox.delete(0, tk.END)
+        try:
+            names = sorted(
+                n for n in os.listdir(folder)
+                if n.lower().endswith('.mid') or n.lower().endswith('.midi')
+            )
+            for n in names:
+                self.file_listbox.insert(tk.END, n)
+            if names:
+                self.file_listbox.selection_set(0)
+                self.file_listbox.see(0)
+                self._last_file_path = os.path.join(folder, names[0])
+                self._last_tab_visited = 'file'
+            else:
+                self._last_file_path = None
+        except OSError:
+            self.folder_path = ''
+            self.folder_label.config(text='No folder selected')
+            return
+        self._sync_update_your_selection_label()
+
+    def _save_last_file_folder(self, folder: str) -> None:
+        """Persist the last opened file folder."""
+        if not folder:
+            return
+        prefs_path = self._prefs_path()
+        if not prefs_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(prefs_path), exist_ok=True)
+            data = {"last_file_folder": folder}
+            with open(prefs_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
     def _sync_register_room_callbacks(self):
         """Register room callbacks; all run via root.after on main thread."""
         def on_clients_changed(n: int):
@@ -2060,7 +2120,8 @@ del "%ME%"
         last_selected = self._os_last_instruments.get(sid)
         sequence_ids = {inst_id for inst_id, _ in instruments}
         vars_by_id: dict[int, tk.BooleanVar] = {}
-        cb_frame = tk.Frame(frame, bg=BG)
+        content_holder = tk.Frame(frame, bg=BG)
+        cb_frame = tk.Frame(content_holder, bg=BG)
         cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
         for inst_id, name in instruments:
             # Use last selection for this sequence if we have it; otherwise default checked
@@ -2080,8 +2141,8 @@ del "%ME%"
                 cursor='hand2',
                 anchor='w',
             ).pack(anchor='w')
-        simplify_var = tk.BooleanVar(value=False)
-        group_frame = tk.Frame(frame, bg=BG)
+        simplify_var = tk.BooleanVar(value=self._os_simplify_by_category)
+        group_frame = tk.Frame(content_holder, bg=BG)
         group_vars: dict[str, tk.BooleanVar] = {}
         if len(instruments) >= 4:
             groups = get_instrument_groups_for_sequence(sequence_ids)
@@ -2138,6 +2199,9 @@ del "%ME%"
                         anchor='w',
                     ).pack(anchor='w')
                 group_frame.pack_forget()
+                if self._os_simplify_by_category:
+                    show_simplify()
+        content_holder.pack(fill='both', expand=True, pady=(SMALL_PAD, PAD))
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2190,6 +2254,7 @@ del "%ME%"
                 messagebox.showwarning('No instrument selected', 'Select at least one instrument.')
                 return
             self._os_last_instruments[sid] = selected
+            self._os_simplify_by_category = simplify_var.get()
             top.destroy()
             try:
                 path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=selected)
@@ -2200,6 +2265,7 @@ del "%ME%"
             self._on_os_downloaded_for_play(path, sid, tempo, transpose)
 
         def on_cancel():
+            self._os_simplify_by_category = simplify_var.get()
             top.destroy()
             self.os_status.config(text='Ready — focus the game window before playing')
 
@@ -2233,7 +2299,7 @@ del "%ME%"
         ).pack(anchor='w')
         sequence_ids = {inst_id for inst_id, _ in instruments}
         groups = get_instrument_groups_for_sequence(sequence_ids) if len(instruments) >= 4 else []
-        simplify_var = tk.BooleanVar(value=False)
+        simplify_var = tk.BooleanVar(value=self._os_simplify_by_category)
         # participant_index -> { inst_id -> BooleanVar }
         vars_by_participant: list[dict[int, tk.BooleanVar]] = []
         # when simplify: participant_index -> { group_name -> BooleanVar }; and inner / inner_group frames per row
@@ -2329,6 +2395,8 @@ del "%ME%"
             )
             simplify_cb.pack(anchor='w', pady=(SMALL_PAD, 0))
             simplify_var.trace_add('write', lambda *_: show_sync_simplify())
+            if self._os_simplify_by_category:
+                show_sync_simplify()
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2399,6 +2467,7 @@ del "%ME%"
             client_assignments = [list(selections[i]) for i in range(1, len(selections))]
             self._os_last_instruments[sid] = host_selection
             self._os_last_sync_assignments[sid] = [selections[i] for i in range(len(selections))]
+            self._os_simplify_by_category = simplify_var.get()
             top.destroy()
             try:
                 path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=host_selection)
@@ -2409,6 +2478,7 @@ del "%ME%"
             self._on_os_downloaded_for_play(path, sid, tempo, transpose, instrument_assignments=client_assignments)
 
         def on_cancel():
+            self._os_simplify_by_category = simplify_var.get()
             top.destroy()
             self.os_status.config(text='Ready — focus the game window before playing')
 
@@ -2535,6 +2605,7 @@ del "%ME%"
                 self._last_file_path = None
         except OSError as e:
             messagebox.showerror('Error', str(e))
+        self._save_last_file_folder(folder)
         self._sync_update_your_selection_label()
 
     def get_selected_file(self):
@@ -2771,7 +2842,8 @@ del "%ME%"
             frame, text='Select which tracks to include:', font=LABEL_FONT, fg=FG, bg=BG
         ).pack(anchor='w')
         vars_by_idx: dict[int, tk.BooleanVar] = {}
-        cb_frame = tk.Frame(frame, bg=BG)
+        content_holder = tk.Frame(frame, bg=BG)
+        cb_frame = tk.Frame(content_holder, bg=BG)
         cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
         for idx, name, _program in tracks:
             checked = (idx in last_selected) if last_selected is not None else True
@@ -2790,8 +2862,8 @@ del "%ME%"
                 cursor='hand2',
                 anchor='w',
             ).pack(anchor='w')
-        simplify_var = tk.BooleanVar(value=False)
-        group_frame = tk.Frame(frame, bg=BG)
+        simplify_var = tk.BooleanVar(value=self._file_simplify_by_category)
+        group_frame = tk.Frame(content_holder, bg=BG)
         group_vars: dict[str, tk.BooleanVar] = {}
         if len(tracks) >= 4:
             groups = midi.get_file_track_groups_for_tracks(tracks)
@@ -2848,6 +2920,9 @@ del "%ME%"
                         anchor='w',
                     ).pack(anchor='w')
                 group_frame.pack_forget()
+                if self._file_simplify_by_category:
+                    show_simplify()
+        content_holder.pack(fill='both', expand=True, pady=(SMALL_PAD, PAD))
         btn_style = dict(
             font=LABEL_FONT,
             bg=SUBTLE,
@@ -2900,10 +2975,12 @@ del "%ME%"
                 messagebox.showwarning('No track selected', 'Select at least one track to play.')
                 return
             self._file_last_tracks[norm_path] = selected
+            self._file_simplify_by_category = simplify_var.get()
             top.destroy()
             on_confirm(selected)
 
         def on_cancel():
+            self._file_simplify_by_category = simplify_var.get()
             top.destroy()
 
         btn_frame = tk.Frame(frame, bg=BG)
