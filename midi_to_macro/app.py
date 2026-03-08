@@ -1,6 +1,7 @@
 """Tkinter GUI application."""
 
 import logging
+from typing import Callable
 import os
 import shutil
 import subprocess
@@ -283,6 +284,7 @@ class App:
         self._last_os_title: str | None = None
         self._last_tab_visited: str = 'file'  # 'file' or 'os'
         self._os_last_instruments: dict[str, set[int]] = {}  # sid -> last selected instrument ids (in-memory only)
+        self._file_last_tracks: dict[str, set[int]] = {}  # path -> last selected track indices (in-memory only)
 
         self._song_settings = SongSettings()
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
@@ -429,16 +431,6 @@ class App:
         self.file_listbox.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.file_listbox.yview)
         self.file_listbox.bind('<<ListboxSelect>>', lambda e: self._on_file_selection_changed())
-
-        # Tracks / instruments (only shown when MIDI has 2+ tracks)
-        self.file_tracks_frame = tk.LabelFrame(
-            file_tab, text='  Tracks  ', font=LABEL_FONT,
-            fg=SUBTLE, bg=CARD, labelanchor='n'
-        )
-        self.file_tracks_inner = tk.Frame(self.file_tracks_frame, bg=CARD)
-        self.file_tracks_inner.pack(fill='x', padx=PAD, pady=(2, SMALL_PAD))
-        self._file_track_vars: list[tuple[int, str, tk.BooleanVar]] = []  # (index, name, var)
-        self.file_tracks_frame.pack(fill='x', padx=PAD, pady=(0, SMALL_PAD))
 
         # Options section (sliders for tempo and transpose)
         opts_frame = tk.LabelFrame(
@@ -1892,6 +1884,26 @@ del "%ME%"
             cursor='hand2',
         )
 
+        def all_selected():
+            return all(v.get() for v in vars_by_id.values())
+
+        def update_toggle_label(*_):
+            toggle_btn.config(text='Deselect all' if all_selected() else 'Select all')
+
+        def toggle_select_all():
+            select = not all_selected()
+            for v in vars_by_id.values():
+                v.set(select)
+            update_toggle_label()
+
+        toggle_btn = tk.Button(
+            frame, text='Deselect all' if all_selected() else 'Select all',
+            command=toggle_select_all, **btn_style
+        )
+        toggle_btn.pack(anchor='w', pady=(0, SMALL_PAD))
+        for v in vars_by_id.values():
+            v.trace_add('write', update_toggle_label)
+
         def on_play():
             selected = {i for i, v in vars_by_id.items() if v.get()}
             if not selected:
@@ -1980,6 +1992,28 @@ del "%ME%"
             pady=BTN_PAD[1],
             cursor='hand2',
         )
+
+        def all_sync_selected():
+            return all(v.get() for vars_by_id in vars_by_participant for v in vars_by_id.values())
+
+        def update_sync_toggle_label(*_):
+            toggle_btn.config(text='Deselect all' if all_sync_selected() else 'Select all')
+
+        def toggle_sync_select_all():
+            select = not all_sync_selected()
+            for vars_by_id in vars_by_participant:
+                for v in vars_by_id.values():
+                    v.set(select)
+            update_sync_toggle_label()
+
+        toggle_btn = tk.Button(
+            frame, text='Deselect all' if all_sync_selected() else 'Select all',
+            command=toggle_sync_select_all, **btn_style
+        )
+        toggle_btn.pack(anchor='w', pady=(SMALL_PAD, 0))
+        for vars_by_id in vars_by_participant:
+            for v in vars_by_id.values():
+                v.trace_add('write', update_sync_toggle_label)
 
         def on_play():
             selections: list[set[int]] = []
@@ -2352,50 +2386,88 @@ del "%ME%"
         self._song_settings.set(key, self.tempo.get(), self.transpose.get())
         self.os_status.config(text='Tempo/transpose saved for this song.')
 
-    def _update_file_track_checkboxes(self):
-        """Refresh the track checkboxes from the selected MIDI file. Show frame only when 2+ tracks."""
-        path = self.get_selected_file()
-        for w in self.file_tracks_inner.winfo_children():
-            w.destroy()
-        self._file_track_vars.clear()
-        if not path:
-            self.file_tracks_frame.pack_forget()
-            return
-        try:
-            tracks = midi.get_midi_track_info(path)
-        except Exception:
-            self.file_tracks_frame.pack_forget()
-            return
-        if len(tracks) < 2:
-            self.file_tracks_frame.pack_forget()
-            return
-        self.file_tracks_frame.pack(fill='x', padx=PAD, pady=(0, SMALL_PAD))
+    def _show_file_tracks_dialog(self, path: str, tracks: list[tuple[int, str]], on_confirm: Callable[[set[int]], None]):
+        """Show modal to select tracks (only when 2+). on_confirm(selected_set) is called when user clicks Play."""
+        norm_path = os.path.normpath(path)
+        last_selected = self._file_last_tracks.get(norm_path)
+        top = tk.Toplevel(self.root)
+        top.title('Select tracks to play')
+        top.configure(bg=BG)
+        top.transient(self.root)
+        top.grab_set()
+        frame = tk.Frame(top, bg=BG, padx=PAD, pady=PAD)
+        frame.pack(fill='both', expand=True)
+        tk.Label(
+            frame, text='Select which tracks to include:', font=LABEL_FONT, fg=FG, bg=BG
+        ).pack(anchor='w')
+        vars_by_idx: dict[int, tk.BooleanVar] = {}
+        cb_frame = tk.Frame(frame, bg=BG)
+        cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
         for idx, name in tracks:
-            var = tk.BooleanVar(value=True)
-            self._file_track_vars.append((idx, name, var))
-            cb = tk.Checkbutton(
-                self.file_tracks_inner,
+            checked = (idx in last_selected) if last_selected is not None else True
+            var = tk.BooleanVar(value=checked)
+            vars_by_idx[idx] = var
+            tk.Checkbutton(
+                cb_frame,
                 text=name,
                 variable=var,
                 font=SMALL_FONT,
                 fg=FG,
-                bg=CARD,
+                bg=BG,
                 activeforeground=FG,
-                activebackground=CARD,
+                activebackground=BG,
                 selectcolor=ENTRY_BG,
                 cursor='hand2',
                 anchor='w',
-            )
-            cb.pack(anchor='w')
+            ).pack(anchor='w')
+        btn_style = dict(
+            font=LABEL_FONT,
+            bg=SUBTLE,
+            fg=FG,
+            activebackground=ACCENT,
+            activeforeground=FG,
+            relief='flat',
+            padx=BTN_PAD[0],
+            pady=BTN_PAD[1],
+            cursor='hand2',
+        )
 
-    def _get_selected_file_track_indices(self) -> set[int] | None:
-        """Return set of selected track indices, or None to play all tracks. Empty set = none selected."""
-        if not self._file_track_vars:
-            return None
-        selected = {idx for idx, _name, var in self._file_track_vars if var.get()}
-        if selected == {idx for idx, _, _ in self._file_track_vars}:
-            return None
-        return selected
+        def all_tracks_selected():
+            return all(v.get() for v in vars_by_idx.values())
+
+        def update_tracks_toggle_label(*_):
+            toggle_btn.config(text='Deselect all' if all_tracks_selected() else 'Select all')
+
+        def toggle_tracks_select_all():
+            select = not all_tracks_selected()
+            for v in vars_by_idx.values():
+                v.set(select)
+            update_tracks_toggle_label()
+
+        toggle_btn = tk.Button(
+            frame, text='Deselect all' if all_tracks_selected() else 'Select all',
+            command=toggle_tracks_select_all, **btn_style
+        )
+        toggle_btn.pack(anchor='w', pady=(0, SMALL_PAD))
+        for v in vars_by_idx.values():
+            v.trace_add('write', update_tracks_toggle_label)
+
+        def on_play():
+            selected = {i for i, v in vars_by_idx.items() if v.get()}
+            if not selected:
+                messagebox.showwarning('No track selected', 'Select at least one track to play.')
+                return
+            self._file_last_tracks[norm_path] = selected
+            top.destroy()
+            on_confirm(selected)
+
+        def on_cancel():
+            top.destroy()
+
+        btn_frame = tk.Frame(frame, bg=BG)
+        btn_frame.pack(fill='x', pady=(PAD, 0))
+        tk.Button(btn_frame, text='Play', command=on_play, **btn_style).pack(side='left', padx=(0, BTN_GAP))
+        tk.Button(btn_frame, text='Cancel', command=on_cancel, **btn_style).pack(side='left')
 
     def _on_file_selection_changed(self):
         key = self._get_file_song_key()
@@ -2405,7 +2477,6 @@ del "%ME%"
         if path is not None:
             self._last_file_path = path
             self._last_tab_visited = 'file'
-        self._update_file_track_checkboxes()
         self._sync_update_your_selection_label()
         self._sync_report_selection()
 
@@ -2421,24 +2492,10 @@ del "%ME%"
         self._sync_update_your_selection_label()
         self._sync_report_selection()
 
-    def play(self):
-        if not playback.KEYBOARD_AVAILABLE:
-            messagebox.showerror(
-                'Missing dependency',
-                'pynput library not available. Install with: pip install pynput'
-            )
-            return
-        path = self.get_selected_file()
-        if not path:
-            messagebox.showwarning('No file', 'Open a folder and select a MIDI file first')
-            return
-        track_indices = self._get_selected_file_track_indices()
-        if track_indices is not None and len(track_indices) == 0:
-            messagebox.showwarning('No track selected', 'Select at least one track to play.')
-            return
+    def _do_file_play(self, path: str, track_indices: set[int] | None):
+        """Start file playback (or sync broadcast). Called after track selection when needed."""
         self.root.focus_set()
         focus_process_window('wwm.exe')
-        # Host: broadcast and start together after START_DELAY_SEC
         if self._room.is_host():
             try:
                 with open(path, 'rb') as f:
@@ -2453,7 +2510,6 @@ del "%ME%"
             host_send_time = self._room.send_play_file(START_DELAY_SEC, midi_bytes, tempo, transpose, host_playing_label=host_label)
             self._room.host_report_playing(host_label)
             start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
-            # Apply local timing adjustment so host can nudge their own start earlier/later if needed
             start_at += self._sync_local_offset_sec()
             def wait_then_play():
                 delay = start_at - time.time()
@@ -2464,6 +2520,27 @@ del "%ME%"
             self.status.config(text=f'Starting in {int(START_DELAY_SEC)}s… (synced)')
             return
         self._start_file_playback(path, track_indices)
+
+    def play(self):
+        if not playback.KEYBOARD_AVAILABLE:
+            messagebox.showerror(
+                'Missing dependency',
+                'pynput library not available. Install with: pip install pynput'
+            )
+            return
+        path = self.get_selected_file()
+        if not path:
+            messagebox.showwarning('No file', 'Open a folder and select a MIDI file first')
+            return
+        try:
+            tracks = midi.get_midi_track_info(path)
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+            return
+        if len(tracks) < 2:
+            self._do_file_play(path, None)
+            return
+        self._show_file_tracks_dialog(path, tracks, lambda selected: self._do_file_play(path, selected))
 
     def _set_progress(self, current, total):
         if total <= 0:
