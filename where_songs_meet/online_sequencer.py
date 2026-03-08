@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from midi_to_macro.os_proto import download_sequence_midi as _download_sequence_midi
+from where_songs_meet.os_proto import download_sequence_midi as _download_sequence_midi
 
 BASE = "https://onlinesequencer.net"
 SEQUENCES = f"{BASE}/sequences"

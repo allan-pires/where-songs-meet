@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Callable
 
-log = logging.getLogger("midi_to_macro.sync")
+log = logging.getLogger("where_songs_meet.sync")
 
 DEFAULT_PORT = 38472
 START_DELAY_SEC = 3.0  # longer delay so clients have time to receive and clocks align better

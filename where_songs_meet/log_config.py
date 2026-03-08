@@ -10,7 +10,7 @@ LOG_FILE_PATH: str | None = None
 
 def setup_logging() -> None:
     """Configure root logger: file in temp dir + stderr at INFO."""
-    root = logging.getLogger("midi_to_macro")
+    root = logging.getLogger("where_songs_meet")
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
 

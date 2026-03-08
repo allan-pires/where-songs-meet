@@ -8,7 +8,7 @@ class SongSettings:
     """Load/save tempo and transpose per song key (file path or 'os:{sid}')."""
 
     def __init__(self, settings_dir: str = ""):
-        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".midi_to_macro")
+        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".where_songs_meet")
         self._path = os.path.join(self._dir, "song_settings.json")
         self._data: dict[str, dict[str, float | int]] = {}
         self.load()

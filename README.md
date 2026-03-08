@@ -124,7 +124,7 @@ The app may need to run as Administrator so keyboard input reaches games. Window
 - **`main.py`** — Entry point; requests admin then starts the GUI  
 - **`tools/build_exe.py`** — Build single-file Windows exe (PyInstaller)  
 - **`.github/workflows/release.yml`** — On push of tag `v*`, builds exe and creates a GitHub release  
-- **`midi_to_macro/`** — Core package  
+- **`where_songs_meet/`** — Core package  
   - **`midi.py`** — Parse MIDI, map notes to keys, build .mcr lines, export  
   - **`playback.py`** — Run playback from events or file (pynput)  
   - **`sync.py`** — Room (host/join), LAN IP, play-together protocol  
@@ -143,7 +143,7 @@ Tests: `pytest tests/`
 
 ### Creating a release
 
-1. Bump `__version__` in `midi_to_macro/version.py`.
+1. Bump `__version__` in `where_songs_meet/version.py`.
 2. Ensure `origin` points to the repo in `version.py` (allan-pires/where-songs-meet) so the in-app updater and releases match: `git remote -v` → origin should be `https://github.com/allan-pires/where-songs-meet.git`.
 3. Commit, then push a tag: `git tag v1.0.4 && git push origin v1.0.4`.
 4. GitHub Actions on that repo builds the Windows exe and creates a release with `where-songs-meet.exe` attached. “Download and run” in the app fetches from the same repo.

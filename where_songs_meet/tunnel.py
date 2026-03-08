@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Tuple
 
-log = logging.getLogger("midi_to_macro.tunnel")
+log = logging.getLogger("where_songs_meet.tunnel")
 
 # Optional: only used when creating a tunnel
 _tunnel = None  # NgrokTunnel | None

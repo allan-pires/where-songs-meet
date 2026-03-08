@@ -14,9 +14,9 @@ import urllib.request
 import webbrowser
 import zipfile
 
-log = logging.getLogger("midi_to_macro.updater")
+log = logging.getLogger("where_songs_meet.updater")
 
-from midi_to_macro.version import (
+from where_songs_meet.version import (
     GITHUB_RELEASES_API,
     GITHUB_RELEASES_PAGE,
     __version__ as current_version,
@@ -74,7 +74,7 @@ def check_for_updates(timeout: float = 10.0) -> tuple[str | None, str | None, st
             GITHUB_RELEASES_API,
             headers={
                 "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "midi-to-macro-updater",
+                "User-Agent": "where-songs-meet-updater",
             },
         )
         with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:

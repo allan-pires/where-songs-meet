@@ -54,7 +54,7 @@ def get_icon_image(emoji_char: str, size: int = ICON_SIZE) -> "PhotoImage | None
 
 def get_all_theme_icons(size: int = ICON_SIZE) -> dict[str, "PhotoImage"]:
     """Return a dict of icon_name -> PhotoImage for all theme icons. Missing icons are omitted."""
-    from midi_to_macro.theme import (
+    from where_songs_meet.theme import (
         ICON_ADD_LIST,
         ICON_ADD_TO_PLAYLIST,
         ICON_BROWSER,

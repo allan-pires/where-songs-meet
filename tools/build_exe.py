@@ -27,8 +27,8 @@ def main():
         sys.exit(1)
 
     hidden = [
-        "--hidden-import", "midi_to_macro.theme",
-        "--hidden-import", "midi_to_macro.icon_images",
+        "--hidden-import", "where_songs_meet.theme",
+        "--hidden-import", "where_songs_meet.icon_images",
         "--hidden-import", "certifi",
     ]
 

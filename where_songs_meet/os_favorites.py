@@ -8,7 +8,7 @@ class OsFavorites:
     """Load/save list of (sequence_id, title) for onlinesequencer.net."""
 
     def __init__(self, settings_dir: str = ""):
-        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".midi_to_macro")
+        self._dir = settings_dir or os.path.join(os.path.expanduser("~"), ".where_songs_meet")
         self._path = os.path.join(self._dir, "os_favorites.json")
         self._list: list[tuple[str, str]] = []
         self.load()

@@ -13,32 +13,32 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 
-log = logging.getLogger("midi_to_macro.app")
+log = logging.getLogger("where_songs_meet.app")
 
-from midi_to_macro import midi, playback
-from midi_to_macro.online_sequencer import (
+from where_songs_meet import midi, playback
+from where_songs_meet.online_sequencer import (
     download_sequence_midi,
     fetch_sequences,
     open_sequence,
     search_sequences,
     SORT_OPTIONS,
 )
-from midi_to_macro.os_proto import (
+from where_songs_meet.os_proto import (
     fetch_sequence_binary,
     get_sequence_instruments,
     sequence_binary_to_midi,
 )
-from midi_to_macro.os_favorites import OsFavorites
-from midi_to_macro.playlist import Playlist
-from midi_to_macro.song_settings import SongSettings
-from midi_to_macro.sync import DEFAULT_PORT, Room, START_DELAY_SEC, get_lan_ip
-from midi_to_macro.tunnel import get_public_addr, is_available, is_tunnel_active, start_tcp_tunnel, stop_tunnel
-from midi_to_macro.firewall import add_firewall_rules
-from midi_to_macro.updater import check_for_updates, download_update, is_newer, open_release_page
-from midi_to_macro.version import __version__ as APP_VERSION
-from midi_to_macro.window_focus import focus_process_window, get_foreground_process_name
-from midi_to_macro import log_config as _log_config
-from midi_to_macro import theme as _theme
+from where_songs_meet.os_favorites import OsFavorites
+from where_songs_meet.playlist import Playlist
+from where_songs_meet.song_settings import SongSettings
+from where_songs_meet.sync import DEFAULT_PORT, Room, START_DELAY_SEC, get_lan_ip
+from where_songs_meet.tunnel import get_public_addr, is_available, is_tunnel_active, start_tcp_tunnel, stop_tunnel
+from where_songs_meet.firewall import add_firewall_rules
+from where_songs_meet.updater import check_for_updates, download_update, is_newer, open_release_page
+from where_songs_meet.version import __version__ as APP_VERSION
+from where_songs_meet.window_focus import focus_process_window, get_foreground_process_name
+from where_songs_meet import log_config as _log_config
+from where_songs_meet import theme as _theme
 
 _t = _theme
 ACCENT = _t.ACCENT
@@ -299,7 +299,7 @@ class App:
         self._icon_images_small = {}
         self._icon_images_large = {}
         try:
-            from midi_to_macro.icon_images import ICON_SIZE, ICON_SIZE_SMALL, ICON_SIZE_LARGE, get_all_theme_icons
+            from where_songs_meet.icon_images import ICON_SIZE, ICON_SIZE_SMALL, ICON_SIZE_LARGE, get_all_theme_icons
             self._icon_images = get_all_theme_icons(ICON_SIZE)
             self._icon_size = ICON_SIZE
             self._icon_images_small = get_all_theme_icons(ICON_SIZE_SMALL)

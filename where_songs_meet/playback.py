@@ -73,7 +73,7 @@ def run_playback_from_file(
     done_callback(finished_naturally) is called when playback ends (True if completed, False if stopped).
     If track_indices is set, only those tracks are played.
     """
-    from midi_to_macro import midi
+    from where_songs_meet import midi
     finished_naturally = False
     try:
         events = midi.parse_midi(
