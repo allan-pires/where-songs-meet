@@ -59,16 +59,6 @@ End-to-end flow so someone outside your LAN can join your room:
 
 **One-time (host only):** Before **Create public link** works, set your ngrok token once: sign up at [ngrok.com](https://ngrok.com), copy your [authtoken](https://dashboard.ngrok.com/get-started/your-authtoken), then set `NGROK_AUTH_TOKEN` in Windows environment variables (or in PowerShell for that session). Restart the app after adding the variable. See *Playing with friends over the internet (ngrok)* below for details.
 
-### Key mappings
-
-Notes are mapped by **pitch class** (note % 12) and **row by range**:
-
-- **Low row** (notes &lt; 60): Z, X, C, V, B, N, M  
-- **Mid row** (60–71): A, S, D, F, G, H, J  
-- **High row** (72+): Q, W, E, R, T, Y, U  
-
-Notes outside 0–95 are clamped. Black keys use **Shift** (or **Ctrl** for D♯ on the low row). Use **Transpose** to shift octaves.
-
 ### Playing with friends over the internet (ngrok)
 
 To let friends **not on your local network** join your room, use the built-in **public link** (ngrok TCP tunnel):
@@ -87,6 +77,16 @@ To let friends **not on your local network** join your room, use the built-in **
    - In **Join**, paste the address (e.g. `0.tcp.ngrok.io:12345`) and connect. No VPN or being on the same LAN required.
 
 The tunnel closes when you stop hosting. Requires **pyngrok** (`pip install -r requirements.txt`).
+
+### Key mappings
+
+Notes are mapped by **pitch class** (note % 12) and **row by range**:
+
+- **Low row** (notes &lt; 60): Z, X, C, V, B, N, M  
+- **Mid row** (60–71): A, S, D, F, G, H, J  
+- **High row** (72+): Q, W, E, R, T, Y, U  
+
+Notes outside 0–95 are clamped. Black keys use **Shift** (or **Ctrl** for D♯ on the low row). Use **Transpose** to shift octaves.
 
 ## Important notes
 
