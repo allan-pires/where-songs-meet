@@ -22,6 +22,11 @@ from midi_to_macro.online_sequencer import (
     search_sequences,
     SORT_OPTIONS,
 )
+from midi_to_macro.os_proto import (
+    fetch_sequence_binary,
+    get_sequence_instruments,
+    sequence_binary_to_midi,
+)
 from midi_to_macro.os_favorites import OsFavorites
 from midi_to_macro.playlist import Playlist
 from midi_to_macro.song_settings import SongSettings
@@ -277,6 +282,7 @@ class App:
         self._last_os_sid: str | None = None
         self._last_os_title: str | None = None
         self._last_tab_visited: str = 'file'  # 'file' or 'os'
+        self._os_last_instruments: dict[str, set[int]] = {}  # sid -> last selected instrument ids (in-memory only)
 
         self._song_settings = SongSettings()
         self._os_favorites = OsFavorites(self._song_settings.settings_dir)
@@ -423,6 +429,16 @@ class App:
         self.file_listbox.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.file_listbox.yview)
         self.file_listbox.bind('<<ListboxSelect>>', lambda e: self._on_file_selection_changed())
+
+        # Tracks / instruments (only shown when MIDI has 2+ tracks)
+        self.file_tracks_frame = tk.LabelFrame(
+            file_tab, text='  Tracks  ', font=LABEL_FONT,
+            fg=SUBTLE, bg=CARD, labelanchor='n'
+        )
+        self.file_tracks_inner = tk.Frame(self.file_tracks_frame, bg=CARD)
+        self.file_tracks_inner.pack(fill='x', padx=PAD, pady=(2, SMALL_PAD))
+        self._file_track_vars: list[tuple[int, str, tk.BooleanVar]] = []  # (index, name, var)
+        self.file_tracks_frame.pack(fill='x', padx=PAD, pady=(0, SMALL_PAD))
 
         # Options section (sliders for tempo and transpose)
         opts_frame = tk.LabelFrame(
@@ -1540,7 +1556,7 @@ del "%ME%"
             self.root.after(0, lambda: self._sync_start_file_playback(path, tempo, transpose))
         threading.Thread(target=wait_then_play, daemon=True).start()
 
-    def _sync_start_file_playback(self, path: str, tempo: float, transpose: int):
+    def _sync_start_file_playback(self, path: str, tempo: float, transpose: int, track_indices: set[int] | None = None):
         """Start playback from a path (sync received file); runs on main thread."""
         self._current_source = 'sync'
         self._stopped_by_user = False
@@ -1557,6 +1573,7 @@ del "%ME%"
         threading.Thread(
             target=self._play_thread,
             args=(path, tempo, transpose),
+            kwargs={'track_indices': track_indices},
             daemon=True
         ).start()
         self._start_focus_check()
@@ -1752,7 +1769,7 @@ del "%ME%"
         self.os_status.config(text='Removed from favorites.')
 
     def _load_and_play_sequence(self):
-        """Download selected sequence as MIDI and start playback (no browser)."""
+        """Download selected sequence, optionally show instrument picker, then start playback."""
         if not playback.KEYBOARD_AVAILABLE:
             messagebox.showerror(
                 'Missing dependency',
@@ -1773,13 +1790,114 @@ del "%ME%"
 
         def do_load_and_play():
             try:
-                path = download_sequence_midi(sid, bpm=110, timeout=20)
-                self.root.after(0, lambda: self._on_os_downloaded_for_play(path, sid, tempo, transpose))
+                binary = fetch_sequence_binary(sid, timeout=20)
+                instruments = get_sequence_instruments(binary)
+                self.root.after(
+                    0,
+                    lambda: self._on_os_binary_loaded_for_play(binary, sid, tempo, transpose, instruments),
+                )
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror('Load failed', str(e)))
                 self.root.after(0, lambda: self.os_status.config(text='Load failed.'))
 
         threading.Thread(target=do_load_and_play, daemon=True).start()
+
+    def _on_os_binary_loaded_for_play(
+        self,
+        binary: bytes,
+        sid: str,
+        tempo: float,
+        transpose: int,
+        instruments: list[tuple[int, str]],
+    ):
+        """On main thread: if 2+ instruments show dialog; else convert and start playback."""
+        if len(instruments) < 2:
+            try:
+                path = sequence_binary_to_midi(binary, bpm=110)
+            except Exception as e:
+                messagebox.showerror('Load failed', str(e))
+                self.os_status.config(text='Load failed.')
+                return
+            self._on_os_downloaded_for_play(path, sid, tempo, transpose)
+            return
+        self._show_os_instruments_dialog(binary, sid, tempo, transpose, instruments)
+
+    def _show_os_instruments_dialog(
+        self,
+        binary: bytes,
+        sid: str,
+        tempo: float,
+        transpose: int,
+        instruments: list[tuple[int, str]],
+    ):
+        """Show modal dialog with instrument checkboxes. Remembers last selection per sequence (in-memory)."""
+        top = tk.Toplevel(self.root)
+        top.title('Select instruments to play')
+        top.configure(bg=BG)
+        top.transient(self.root)
+        top.grab_set()
+        frame = tk.Frame(top, bg=BG, padx=PAD, pady=PAD)
+        frame.pack(fill='both', expand=True)
+        tk.Label(
+            frame, text='Select which instruments to include:', font=LABEL_FONT, fg=FG, bg=BG
+        ).pack(anchor='w')
+        last_selected = self._os_last_instruments.get(sid)
+        vars_by_id: dict[int, tk.BooleanVar] = {}
+        cb_frame = tk.Frame(frame, bg=BG)
+        cb_frame.pack(fill='x', pady=(SMALL_PAD, PAD))
+        for inst_id, name in instruments:
+            # Use last selection for this sequence if we have it; otherwise default checked
+            checked = (inst_id in last_selected) if last_selected is not None else True
+            var = tk.BooleanVar(value=checked)
+            vars_by_id[inst_id] = var
+            tk.Checkbutton(
+                cb_frame,
+                text=name,
+                variable=var,
+                font=SMALL_FONT,
+                fg=FG,
+                bg=BG,
+                activeforeground=FG,
+                activebackground=BG,
+                selectcolor=ENTRY_BG,
+                cursor='hand2',
+                anchor='w',
+            ).pack(anchor='w')
+        btn_style = dict(
+            font=LABEL_FONT,
+            bg=SUBTLE,
+            fg=FG,
+            activebackground=ACCENT,
+            activeforeground=FG,
+            relief='flat',
+            padx=BTN_PAD[0],
+            pady=BTN_PAD[1],
+            cursor='hand2',
+        )
+
+        def on_play():
+            selected = {i for i, v in vars_by_id.items() if v.get()}
+            if not selected:
+                messagebox.showwarning('No instrument selected', 'Select at least one instrument.')
+                return
+            self._os_last_instruments[sid] = selected
+            top.destroy()
+            try:
+                path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=selected)
+            except Exception as e:
+                messagebox.showerror('Load failed', str(e))
+                self.os_status.config(text='Load failed.')
+                return
+            self._on_os_downloaded_for_play(path, sid, tempo, transpose)
+
+        def on_cancel():
+            top.destroy()
+            self.os_status.config(text='Ready — focus the game window before playing')
+
+        btn_frame = tk.Frame(frame, bg=BG)
+        btn_frame.pack(fill='x', pady=(PAD, 0))
+        tk.Button(btn_frame, text='Play', command=on_play, **btn_style).pack(side='left', padx=(0, BTN_GAP))
+        tk.Button(btn_frame, text='Cancel', command=on_cancel, **btn_style).pack(side='left')
 
     def _on_os_downloaded_for_play(self, path: str, sid: str, tempo: float, transpose: int):
         """Called on main thread when OS MIDI is downloaded. If host, broadcast and sync start; else start now."""
@@ -1995,7 +2113,7 @@ del "%ME%"
         self._pl_select_playing()
         self._start_next_playlist_item()
 
-    def _start_file_playback(self, path: str, keep_source: bool = False):
+    def _start_file_playback(self, path: str, track_indices: set[int] | None = None, keep_source: bool = False):
         """Start playback of a file MIDI. If keep_source is True, do not set _current_source (used by playlist)."""
         if not keep_source:
             self._current_source = 'file'
@@ -2010,6 +2128,7 @@ del "%ME%"
         threading.Thread(
             target=self._play_thread,
             args=(path, self.tempo.get(), self.transpose.get()),
+            kwargs={'track_indices': track_indices},
             daemon=True
         ).start()
         self._start_focus_check()
@@ -2114,6 +2233,51 @@ del "%ME%"
         self._song_settings.set(key, self.tempo.get(), self.transpose.get())
         self.os_status.config(text='Tempo/transpose saved for this song.')
 
+    def _update_file_track_checkboxes(self):
+        """Refresh the track checkboxes from the selected MIDI file. Show frame only when 2+ tracks."""
+        path = self.get_selected_file()
+        for w in self.file_tracks_inner.winfo_children():
+            w.destroy()
+        self._file_track_vars.clear()
+        if not path:
+            self.file_tracks_frame.pack_forget()
+            return
+        try:
+            tracks = midi.get_midi_track_info(path)
+        except Exception:
+            self.file_tracks_frame.pack_forget()
+            return
+        if len(tracks) < 2:
+            self.file_tracks_frame.pack_forget()
+            return
+        self.file_tracks_frame.pack(fill='x', padx=PAD, pady=(0, SMALL_PAD))
+        for idx, name in tracks:
+            var = tk.BooleanVar(value=True)
+            self._file_track_vars.append((idx, name, var))
+            cb = tk.Checkbutton(
+                self.file_tracks_inner,
+                text=name,
+                variable=var,
+                font=SMALL_FONT,
+                fg=FG,
+                bg=CARD,
+                activeforeground=FG,
+                activebackground=CARD,
+                selectcolor=ENTRY_BG,
+                cursor='hand2',
+                anchor='w',
+            )
+            cb.pack(anchor='w')
+
+    def _get_selected_file_track_indices(self) -> set[int] | None:
+        """Return set of selected track indices, or None to play all tracks. Empty set = none selected."""
+        if not self._file_track_vars:
+            return None
+        selected = {idx for idx, _name, var in self._file_track_vars if var.get()}
+        if selected == {idx for idx, _, _ in self._file_track_vars}:
+            return None
+        return selected
+
     def _on_file_selection_changed(self):
         key = self._get_file_song_key()
         self._apply_song_settings_for_key(key)
@@ -2122,6 +2286,7 @@ del "%ME%"
         if path is not None:
             self._last_file_path = path
             self._last_tab_visited = 'file'
+        self._update_file_track_checkboxes()
         self._sync_update_your_selection_label()
         self._sync_report_selection()
 
@@ -2148,6 +2313,10 @@ del "%ME%"
         if not path:
             messagebox.showwarning('No file', 'Open a folder and select a MIDI file first')
             return
+        track_indices = self._get_selected_file_track_indices()
+        if track_indices is not None and len(track_indices) == 0:
+            messagebox.showwarning('No track selected', 'Select at least one track to play.')
+            return
         self.root.focus_set()
         focus_process_window('wwm.exe')
         # Host: broadcast and start together after START_DELAY_SEC
@@ -2171,11 +2340,11 @@ del "%ME%"
                 delay = start_at - time.time()
                 if delay > 0:
                     time.sleep(delay)
-                self.root.after(0, lambda: self._sync_start_file_playback(path, tempo, transpose))
+                self.root.after(0, lambda: self._sync_start_file_playback(path, tempo, transpose, track_indices))
             threading.Thread(target=wait_then_play, daemon=True).start()
             self.status.config(text=f'Starting in {int(START_DELAY_SEC)}s… (synced)')
             return
-        self._start_file_playback(path)
+        self._start_file_playback(path, track_indices)
 
     def _set_progress(self, current, total):
         if total <= 0:
@@ -2270,7 +2439,7 @@ del "%ME%"
         self.os_stop_btn.config(state='disabled', bg=SUBTLE)
         self._stop_buttons_enabled = False
 
-    def _play_thread(self, path, tempo_multiplier, transpose):
+    def _play_thread(self, path, tempo_multiplier, transpose, track_indices: set[int] | None = None):
         def on_done(finished_naturally: bool):
             self.playing = False
             self.root.after(0, lambda: self._on_playback_finished(finished_naturally))
@@ -2281,6 +2450,7 @@ del "%ME%"
                 is_playing=lambda: self.playing,
                 progress_callback=lambda c, t: self.root.after(0, lambda c=c, t=t: self._set_progress(c, t)),
                 done_callback=on_done,
+                track_indices=track_indices,
             )
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror('Playback error', str(e)))

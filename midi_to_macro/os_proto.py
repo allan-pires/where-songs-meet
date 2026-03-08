@@ -17,6 +17,74 @@ from typing import Any
 # MIDI pitch: B7=107, so pitch = 107 - type_index
 PIANO_NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
+# Online Sequencer instrument ID -> display name (from onlinesequencer.net/wiki/Instruments).
+# Unknown IDs (e.g. cloned instruments) fall back to "Instrument {id}".
+OS_INSTRUMENT_NAMES: dict[int, str] = {
+    0: "Electric Piano (Classic)",
+    1: "Acoustic Guitar (Classic)",
+    2: "Drum Kit",
+    3: "Smooth Synth (Classic)",
+    4: "Electric Guitar",
+    5: "Bass Guitar (Classic)",
+    6: "Synth Pluck",
+    7: "Scifi",
+    8: "Grand Piano (Classic)",
+    9: "French Horn (Classic)",
+    10: "Trombone (Classic)",
+    11: "Violin (Classic)",
+    12: "Cello (Classic)",
+    13: "8-Bit Sine",
+    14: "8-Bit Square",
+    15: "8-Bit Sawtooth",
+    16: "8-Bit Triangle",
+    17: "Harpsichord",
+    18: "Concert Harp",
+    19: "Xylophone",
+    20: "Pizzicato",
+    21: "Steel Drums",
+    22: "Sitar",
+    23: "Flute",
+    24: "Saxophone",
+    25: "Ragtime Piano",
+    26: "Music Box",
+    27: "Synth Bass (Classic)",
+    28: "Church Organ",
+    29: "Slap Bass",
+    30: "Pop Synth (Classic)",
+    31: "Electric Drum Kit (Classic)",
+    32: "Jazz Guitar",
+    33: "Koto",
+    34: "Vibraphone",
+    35: "Muted E-Guitar",
+    36: "808 Drum Kit",
+    37: "808 Bass",
+    38: "Distortion Guitar (Classic)",
+    39: "8-Bit Drum Kit",
+    40: "2013 Drum Kit",
+    41: "Grand Piano",
+    42: "909 Drum Kit",
+    43: "Electric Piano",
+    44: "Distortion Guitar",
+    45: "Cello",
+    46: "Violin",
+    47: "Strings",
+    48: "Bass",
+    49: "Clean Guitar",
+    50: "French Horn",
+    51: "Trombone",
+    52: "Smooth Synth",
+    53: "2023 Drum Kit",
+    54: "Bass Guitar",
+    55: "Synthesizer",
+    56: "Synth Bass",
+    57: "Pop Synth",
+    58: "Acoustic Guitar",
+    59: "Lucent Choir",
+    60: "EDM Kit",
+    61: "Brass",
+    62: "Rhodes",
+}
+
 
 def _note_type_index_to_midi(index: int) -> int:
     """Convert OS note type index (0-71) to MIDI note number. k=0 -> B7=107, k=71 -> C2=36."""
@@ -191,6 +259,21 @@ def _parse_note_message(data: bytes, pos: int, end: int) -> dict[str, Any] | Non
     return None
 
 
+def get_sequence_instrument_name(inst_id: int) -> str:
+    """Return display name for an Online Sequencer instrument ID. Unknown IDs use 'Instrument {id}'."""
+    return OS_INSTRUMENT_NAMES.get(inst_id, f"Instrument {inst_id}")
+
+
+def get_sequence_instruments(binary: bytes) -> list[tuple[int, str]]:
+    """Return list of (instrument_id, display_name) for all instruments used in the sequence.
+    Sorted by instrument id; display name uses OS instrument names when known."""
+    notes = _parse_sequence_notes(binary)
+    ids: set[int] = set()
+    for n in notes:
+        ids.add(n.get("instrument", 0))
+    return [(i, get_sequence_instrument_name(i)) for i in sorted(ids)]
+
+
 def _parse_sequence_notes(data: bytes) -> list[dict[str, Any]]:
     """Parse full sequence: field 1 = blob of notes (nested), field 2 = repeated compact notes. Collect all."""
     notes: list[dict[str, Any]] = []
@@ -272,14 +355,20 @@ def sequence_binary_to_midi(
     binary: bytes,
     bpm: float = 110,
     output_path: str | None = None,
+    instrument_ids: set[int] | None = None,
 ) -> str:
-    """Convert decoded sequence binary to a MIDI file. Returns path to the created file."""
+    """Convert decoded sequence binary to a MIDI file. Returns path to the created file.
+    If instrument_ids is set, only notes from those instruments are included."""
     import mido
     from mido import MidiFile, MidiTrack, Message, MetaMessage, bpm2tempo
 
     notes = _parse_sequence_notes(binary)
     if not notes:
         raise ValueError("No notes found in sequence data")
+    if instrument_ids is not None:
+        notes = [n for n in notes if n.get("instrument", 0) in instrument_ids]
+        if not notes:
+            raise ValueError("No notes left after filtering by selected instruments")
 
     used_bpm = _extract_bpm(binary) or bpm
     ticks_per_beat = 384
@@ -353,7 +442,9 @@ def download_sequence_midi(
     sequence_id: str,
     bpm: float = 110,
     timeout: float = 15,
+    instrument_ids: set[int] | None = None,
 ) -> str:
-    """Download a sequence by ID and convert to a temporary MIDI file. Returns path."""
+    """Download a sequence by ID and convert to a temporary MIDI file. Returns path.
+    If instrument_ids is set, only notes from those instruments are included."""
     binary = fetch_sequence_binary(sequence_id, timeout=timeout)
-    return sequence_binary_to_midi(binary, bpm=bpm)
+    return sequence_binary_to_midi(binary, bpm=bpm, instrument_ids=instrument_ids)

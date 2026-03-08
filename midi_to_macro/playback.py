@@ -66,15 +66,22 @@ def run_playback_from_file(
     is_playing: Callable[[], bool],
     progress_callback: Callable[[int, int], None] | None = None,
     done_callback: Callable[[bool], None] | None = None,
+    track_indices: set[int] | None = None,
 ) -> None:
     """
     Parse MIDI file and run playback in the current thread.
     done_callback(finished_naturally) is called when playback ends (True if completed, False if stopped).
+    If track_indices is set, only those tracks are played.
     """
     from midi_to_macro import midi
     finished_naturally = False
     try:
-        events = midi.parse_midi(path, tempo_multiplier=tempo_multiplier, transpose=transpose)
+        events = midi.parse_midi(
+            path,
+            tempo_multiplier=tempo_multiplier,
+            transpose=transpose,
+            track_indices=track_indices,
+        )
         if progress_callback:
             progress_callback(0, len(events))
         run_playback(events, is_playing, progress_callback=progress_callback)

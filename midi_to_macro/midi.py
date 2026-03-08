@@ -45,22 +45,42 @@ def map_note_to_key(note: int) -> tuple[list[str], str]:
     return (mods, key)
 
 
+def get_midi_track_info(path: str) -> list[tuple[int, str]]:
+    """Return list of (track_index, track_name) for each track in the MIDI file.
+    Track name is taken from the track_name meta message, or 'Track N' if missing."""
+    mid = mido.MidiFile(path)
+    result: list[tuple[int, str]] = []
+    for i, track in enumerate(mid.tracks):
+        name = f"Track {i}"
+        for msg in track:
+            if msg.type == "track_name" and hasattr(msg, "name"):
+                name = msg.name or name
+                break
+        result.append((i, name))
+    return result
+
+
 def parse_midi(
     path: str,
     tempo_multiplier: float = 1.0,
     transpose: int = 0,
+    track_indices: set[int] | None = None,
 ) -> list[tuple[int, list[str], str]]:
-    """Parse MIDI file into events: (time_ms, modifiers, key)."""
+    """Parse MIDI file into events: (time_ms, modifiers, key).
+    If track_indices is set, only notes from those tracks are included; otherwise all tracks."""
     mid = mido.MidiFile(path)
     ticks_per_beat = mid.ticks_per_beat
     tempo = 500_000  # default
     time_ticks = 0
     events: list[tuple[int, list[str], str]] = []
-    for msg in mido.merge_tracks(mid.tracks):
+    tracks_to_merge = mid.tracks
+    if track_indices is not None:
+        tracks_to_merge = [mid.tracks[i] for i in range(len(mid.tracks)) if i in track_indices]
+    for msg in mido.merge_tracks(tracks_to_merge):
         time_ticks += msg.time
-        if msg.type == 'set_tempo':
+        if msg.type == "set_tempo":
             tempo = msg.tempo
-        if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+        if msg.type == "note_on" and getattr(msg, "velocity", 0) > 0:
             time_ms = int(mido.tick2second(time_ticks, ticks_per_beat, tempo) * 1000)
             time_ms = int(time_ms * tempo_multiplier)
             note = _clamp_note(msg.note + transpose)
