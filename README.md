@@ -42,6 +42,17 @@ python main.py
 3. **Playlist** — Play queued songs in order. Add/remove/clear; play or stop from this tab.
 4. **Play together** — **Host**: set port and start; **Join**: enter host:port. Host selects music and presses Play; clients start in sync. See below for playing with friends over the internet (ngrok).
 
+### How to play together using ngrok (friends not on your network)
+
+End-to-end flow so someone outside your LAN can join your room:
+
+| Who | Steps |
+|-----|--------|
+| **Host (you)** | 1. In **Play together**, click **Host** to start the room.<br>2. Click **Create public link** and wait for the address (e.g. `0.tcp.ngrok.io:12345`).<br>3. Click **Copy** and send that address to your friend (chat, email, etc.).<br>4. Pick a song (File or Online Sequencer), assign instruments if needed, then press **Play** when everyone is ready. |
+| **Friend** | 1. Open the app and go to **Play together**.<br>2. In **Join**, paste the address you received (e.g. `0.tcp.ngrok.io:12345`).<br>3. Click the connect button to join.<br>4. When the host presses Play, playback starts in sync. |
+
+**One-time (host only):** Before **Create public link** works, set your ngrok token once: sign up at [ngrok.com](https://ngrok.com), copy your [authtoken](https://dashboard.ngrok.com/get-started/your-authtoken), then set `NGROK_AUTH_TOKEN` in Windows environment variables (or in PowerShell for that session). Restart the app after adding the variable. See *Playing with friends over the internet (ngrok)* below for details.
+
 ### Key mappings
 
 Notes are mapped by **pitch class** (note % 12) and **row by range**:
