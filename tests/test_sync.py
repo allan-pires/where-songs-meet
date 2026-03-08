@@ -75,8 +75,8 @@ class TestRoom:
     def test_handle_message_play_file_invokes_callback(self):
         r = Room()
         received = []
-        def on_play(start_in, midi_bytes, tempo, transpose, host_send_time=None):
-            received.append(('play_file', start_in, len(midi_bytes), tempo, transpose, host_send_time))
+        def on_play(start_in, midi_bytes, tempo, transpose, *rest):
+            received.append(('play_file', start_in, len(midi_bytes), tempo, transpose, rest[0] if rest else None))
         r.on_play_file = on_play
         payload = {
             'cmd': 'play_file',
@@ -97,8 +97,8 @@ class TestRoom:
     def test_handle_message_play_os_invokes_callback(self):
         r = Room()
         received = []
-        def on_play(start_in, sid, tempo, transpose, host_send_time=None):
-            received.append(('play_os', start_in, sid, tempo, transpose, host_send_time))
+        def on_play(start_in, sid, tempo, transpose, *rest):
+            received.append(('play_os', start_in, sid, tempo, transpose, rest[0] if rest else None))
         r.on_play_os = on_play
         payload = {
             'cmd': 'play_os',

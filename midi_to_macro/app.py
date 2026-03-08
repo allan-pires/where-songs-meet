@@ -1100,8 +1100,8 @@ class App:
             self.root.after(0, self._sync_update_disconnected_ui)
         def on_play_file(start_in: float, midi_bytes: bytes, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
             self.root.after(0, lambda: self._sync_received_play_file(start_in, midi_bytes, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset))
-        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
-            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset))
+        def on_play_os(start_in: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None, assigned_instrument_ids: set[int] | None = None):
+            self.root.after(0, lambda: self._sync_received_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, sync_offset, assigned_instrument_ids))
         def on_sync_ack(offset: float):
             self.root.after(0, lambda: None)  # offset already stored in Room; optional UI feedback
         def on_pong(rtt_sec: float):
@@ -1578,8 +1578,8 @@ del "%ME%"
         ).start()
         self._start_focus_check()
 
-    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None):
-        """Client received play_os: play host's OS or own selection at same time; report what we're playing."""
+    def _sync_received_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_send_time: float | None = None, host_playing_label: str = '', client_recv_time: float | None = None, sync_offset: float | None = None, assigned_instrument_ids: set[int] | None = None):
+        """Client received play_os: play host's OS (with assigned instruments) or own selection; report what we're playing."""
         log.info("Client received play_os sid=%s (start_in=%.1fs)", sid, start_in_sec)
         if not playback.KEYBOARD_AVAILABLE:
             return
@@ -1591,6 +1591,18 @@ del "%ME%"
         if use_my:
             # Use client's own tempo and transposition when playing their selection
             tempo, transpose = self.tempo.get(), self.transpose.get()
+            # When playing own selection: require client to have selected at least one instrument (in OS tab)
+            my_inst = self._os_last_instruments.get(my_sid)
+            if not my_inst or len(my_inst) == 0:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    'No instruments selected',
+                    'Select your sequence in the Online Sequencer tab, click Play, and choose at least one instrument. Then try again.',
+                ))
+                return
+        # When playing host selection: require host to have sent instrument assignments (everyone has instruments)
+        elif assigned_instrument_ids is None or len(assigned_instrument_ids) == 0:
+            self.root.after(0, lambda: messagebox.showwarning('No instruments assigned', 'Host must assign you at least one instrument before playing.'))
+            return
         # Use clock sync offset when available so we start at same moment as host; else fall back to receive-time delay
         if sync_offset is not None and host_send_time is not None and isinstance(host_send_time, (int, float)):
             start_at = (float(host_send_time) + start_in_sec) - sync_offset
@@ -1607,13 +1619,15 @@ del "%ME%"
         def download_and_schedule():
             if use_my:
                 try:
-                    path = download_sequence_midi(my_sid, bpm=110, timeout=20)
+                    my_inst = self._os_last_instruments.get(my_sid)
+                    path = download_sequence_midi(my_sid, bpm=110, timeout=20, instrument_ids=my_inst)
                 except Exception:
                     self.root.after(0, lambda: self.sync_status.config(text='Download failed.'))
                     return
             else:
                 try:
-                    path = download_sequence_midi(sid, bpm=110, timeout=20)
+                    binary = fetch_sequence_binary(sid, timeout=20)
+                    path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=assigned_instrument_ids)
                 except Exception:
                     self.root.after(0, lambda: self.sync_status.config(text='Download failed.'))
                     return
@@ -1810,7 +1824,7 @@ del "%ME%"
         transpose: int,
         instruments: list[tuple[int, str]],
     ):
-        """On main thread: if 2+ instruments show dialog; else convert and start playback."""
+        """On main thread: if 2+ instruments show dialog (sync: assignment dialog; else simple); else convert and start."""
         if len(instruments) < 2:
             try:
                 path = sequence_binary_to_midi(binary, bpm=110)
@@ -1820,7 +1834,10 @@ del "%ME%"
                 return
             self._on_os_downloaded_for_play(path, sid, tempo, transpose)
             return
-        self._show_os_instruments_dialog(binary, sid, tempo, transpose, instruments)
+        if self._room.is_host():
+            self._show_os_sync_assign_dialog(binary, sid, tempo, transpose, instruments)
+        else:
+            self._show_os_instruments_dialog(binary, sid, tempo, transpose, instruments)
 
     def _show_os_instruments_dialog(
         self,
@@ -1899,13 +1916,115 @@ del "%ME%"
         tk.Button(btn_frame, text='Play', command=on_play, **btn_style).pack(side='left', padx=(0, BTN_GAP))
         tk.Button(btn_frame, text='Cancel', command=on_cancel, **btn_style).pack(side='left')
 
-    def _on_os_downloaded_for_play(self, path: str, sid: str, tempo: float, transpose: int):
+    def _show_os_sync_assign_dialog(
+        self,
+        binary: bytes,
+        sid: str,
+        tempo: float,
+        transpose: int,
+        instruments: list[tuple[int, str]],
+    ):
+        """Show dialog for host to assign instruments to each participant (Host + Participant 1, 2, ...). Everyone must have at least one."""
+        n_clients = self._room.client_count()
+        participant_names = ["Host"] + [f"Participant {i + 1}" for i in range(n_clients)]
+        top = tk.Toplevel(self.root)
+        top.title('Assign instruments (Play together)')
+        top.configure(bg=BG)
+        top.transient(self.root)
+        top.grab_set()
+        frame = tk.Frame(top, bg=BG, padx=PAD, pady=PAD)
+        frame.pack(fill='both', expand=True)
+        tk.Label(
+            frame,
+            text='Assign at least one instrument to each participant. Same instrument can be assigned to multiple people.',
+            font=SMALL_FONT, fg=FG, bg=BG, wraplength=400, justify='left',
+        ).pack(anchor='w')
+        # participant_index -> { inst_id -> BooleanVar }
+        vars_by_participant: list[dict[int, tk.BooleanVar]] = []
+        last_assignments = self._os_last_instruments.get(sid)
+        for p_idx, p_name in enumerate(participant_names):
+            row_frame = tk.LabelFrame(frame, text=f'  {p_name}  ', font=SMALL_FONT, fg=SUBTLE, bg=CARD, labelanchor='n')
+            row_frame.pack(fill='x', pady=(SMALL_PAD, 0))
+            inner = tk.Frame(row_frame, bg=CARD)
+            inner.pack(fill='x', padx=SMALL_PAD, pady=(2, SMALL_PAD))
+            vars_by_id: dict[int, tk.BooleanVar] = {}
+            for inst_id, name in instruments:
+                if last_assignments is not None and p_idx == 0:
+                    checked = inst_id in last_assignments
+                else:
+                    checked = True
+                var = tk.BooleanVar(value=checked)
+                vars_by_id[inst_id] = var
+                tk.Checkbutton(
+                    inner,
+                    text=name,
+                    variable=var,
+                    font=SMALL_FONT,
+                    fg=FG,
+                    bg=CARD,
+                    activeforeground=FG,
+                    activebackground=CARD,
+                    selectcolor=ENTRY_BG,
+                    cursor='hand2',
+                    anchor='w',
+                ).pack(side='left', padx=(0, PAD))
+            vars_by_participant.append(vars_by_id)
+        btn_style = dict(
+            font=LABEL_FONT,
+            bg=SUBTLE,
+            fg=FG,
+            activebackground=ACCENT,
+            activeforeground=FG,
+            relief='flat',
+            padx=BTN_PAD[0],
+            pady=BTN_PAD[1],
+            cursor='hand2',
+        )
+
+        def on_play():
+            selections: list[set[int]] = []
+            for vars_by_id in vars_by_participant:
+                sel = {i for i, v in vars_by_id.items() if v.get()}
+                selections.append(sel)
+            for i, sel in enumerate(selections):
+                if not sel:
+                    messagebox.showwarning(
+                        'Select instruments',
+                        f'Assign at least one instrument to {participant_names[i]}.',
+                    )
+                    return
+            host_selection = selections[0]
+            client_assignments = [list(selections[i]) for i in range(1, len(selections))]
+            self._os_last_instruments[sid] = host_selection
+            top.destroy()
+            try:
+                path = sequence_binary_to_midi(binary, bpm=110, instrument_ids=host_selection)
+            except Exception as e:
+                messagebox.showerror('Load failed', str(e))
+                self.os_status.config(text='Load failed.')
+                return
+            self._on_os_downloaded_for_play(path, sid, tempo, transpose, instrument_assignments=client_assignments)
+
+        def on_cancel():
+            top.destroy()
+            self.os_status.config(text='Ready — focus the game window before playing')
+
+        btn_frame = tk.Frame(frame, bg=BG)
+        btn_frame.pack(fill='x', pady=(PAD, 0))
+        tk.Button(btn_frame, text='Play', command=on_play, **btn_style).pack(side='left', padx=(0, BTN_GAP))
+        tk.Button(btn_frame, text='Cancel', command=on_cancel, **btn_style).pack(side='left')
+
+    def _on_os_downloaded_for_play(self, path: str, sid: str, tempo: float, transpose: int, instrument_assignments: list[list[int]] | None = None):
         """Called on main thread when OS MIDI is downloaded. If host, broadcast and sync start; else start now."""
         if self._room.is_host():
             title = next((t for s, t in self.os_sequences if s == sid), None)
             host_label = f"OS: {title}" if title else f"OS: {sid}"
             log.info("Host sending play_os sid=%s (synced)", sid)
-            host_send_time = self._room.send_play_os(START_DELAY_SEC, sid, tempo, transpose, host_playing_label=host_label)
+            host_send_time = self._room.send_play_os(
+                START_DELAY_SEC, sid, tempo, transpose,
+                host_playing_label=host_label,
+                instrument_assignments=instrument_assignments,
+            )
             self._room.host_report_playing(host_label)
             start_at = (host_send_time if host_send_time is not None else time.time()) + START_DELAY_SEC
             # Apply local timing adjustment so host can nudge their own start earlier/later if needed

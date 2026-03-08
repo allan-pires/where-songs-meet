@@ -54,9 +54,11 @@ class Room:
 
         self._host_playing_label = ""
         self._client_labels: dict[int, str] = {}  # id(client) -> label
+        self._client_order: list[socket.socket] = []  # host: stable order for client sockets (same as _clients) for assignment index
         self._client_sync_offset: float | None = None  # client: host_time - client_time, set when sync_ack received
         self._sync_sent_at: float | None = None  # client: time.time() when we sent sync_req
         self._ping_sent_at: float | None = None  # client: time.time() when we sent ping (for RTT)
+        self._my_client_id: int | None = None  # client: our index (0, 1, 2...) set when we receive your_id
 
     def is_host(self) -> bool:
         return self._host_socket is not None
@@ -103,12 +105,20 @@ class Room:
                 continue
             with self._lock:
                 self._clients.append(client)
+                self._client_order = list(self._clients)
+                client_index = len(self._clients) - 1
             log.info("Client connected (peer %s); total %s", client.getpeername(), len(self._clients))
             if self.on_clients_changed:
                 self.on_clients_changed(self.client_count())
-            threading.Thread(target=self._serve_client, args=(client,), daemon=True).start()
+            threading.Thread(target=self._serve_client, args=(client, client_index), daemon=True).start()
 
-    def _serve_client(self, client: socket.socket):
+    def _serve_client(self, client: socket.socket, client_index: int):
+        # Tell this client their participant index (for instrument assignments)
+        try:
+            payload = json.dumps({'cmd': 'your_id', 'id': client_index}) + '\n'
+            client.sendall(payload.encode('utf-8'))
+        except OSError:
+            pass
         buf = b''
         try:
             client.settimeout(300.0)
@@ -148,11 +158,12 @@ class Room:
             log.debug("Client connection closed: %s", e)
         finally:
             self._client_labels.pop(id(client), None)
-            self._broadcast_room_playing()
             with self._lock:
                 if client in self._clients:
                     self._clients.remove(client)
+                    self._client_order = list(self._clients)
                     log.info("Client disconnected; %s participant(s) left", len(self._clients))
+            self._broadcast_room_playing()
             try:
                 client.close()
             except OSError:
@@ -161,10 +172,10 @@ class Room:
                 self.on_clients_changed(self.client_count())
 
     def _broadcast_room_playing(self):
-        """Build players list and send to all clients; notify host UI via callback."""
+        """Build players list and send to all clients; notify host UI via callback. Order matches _client_order."""
         players = [('host', self._host_playing_label)]
         with self._lock:
-            for c in self._clients:
+            for c in self._client_order:
                 players.append(('client', self._client_labels.get(id(c), '')))
         payload = {'cmd': 'room_playing', 'players': players}
         line = (json.dumps(payload) + '\n').encode('utf-8')
@@ -185,6 +196,7 @@ class Room:
         self._running = False
         self._host_playing_label = ""
         self._client_labels.clear()
+        self._client_order = []
         with self._lock:
             for c in self._clients:
                 try:
@@ -292,7 +304,19 @@ class Room:
                 sid = str(msg.get('sid', ''))
                 tempo = float(msg.get('tempo', 1.0))
                 transpose = int(msg.get('transpose', 0))
-                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, self._client_sync_offset)
+                assignments = msg.get('instrument_assignments')  # list of list of ints, one per client
+                my_id = self._my_client_id if self._my_client_id is not None else 0
+                assigned_ids: set[int] | None = None
+                if isinstance(assignments, list) and 0 <= my_id < len(assignments):
+                    a = assignments[my_id]
+                    if isinstance(a, list):
+                        assigned_ids = {int(x) for x in a if isinstance(x, (int, float))}
+                self.on_play_os(start_in, sid, tempo, transpose, host_send_time, host_playing_label, client_recv_time, self._client_sync_offset, assigned_ids)
+            except (TypeError, ValueError):
+                pass
+        elif cmd == 'your_id':
+            try:
+                self._my_client_id = int(msg.get('id', 0))
             except (TypeError, ValueError):
                 pass
         elif cmd == 'stop' and self.on_stop:
@@ -318,6 +342,7 @@ class Room:
         self._client_sync_offset = None
         self._sync_sent_at = None
         self._ping_sent_at = None
+        self._my_client_id = None
         if self._client_socket:
             try:
                 self._client_socket.shutdown(socket.SHUT_RDWR)
@@ -401,8 +426,8 @@ class Room:
             self.on_clients_changed(self.client_count())
         return host_send_time
 
-    def send_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_playing_label: str = ''):
-        """Host only: broadcast play OS sequence to all clients. Returns host_send_time used (for host to align its own start)."""
+    def send_play_os(self, start_in_sec: float, sid: str, tempo: float, transpose: int, host_playing_label: str = '', instrument_assignments: list[list[int]] | None = None):
+        """Host only: broadcast play OS sequence to all clients. instrument_assignments is one list of instrument IDs per client (same order as _client_order). Returns host_send_time used."""
         if not self.is_host():
             return None
         host_send_time = time.time()
@@ -415,6 +440,8 @@ class Room:
             'transpose': transpose,
             'host_playing_label': host_playing_label,
         }
+        if instrument_assignments is not None:
+            payload['instrument_assignments'] = instrument_assignments
         line = (json.dumps(payload) + '\n').encode('utf-8')
         with self._lock:
             dead = []
