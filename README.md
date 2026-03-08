@@ -4,7 +4,17 @@ Convert MIDI files to macro (.mcr) command files and play them as keyboard input
 
 https://github.com/user-attachments/assets/2d31b7ef-e86d-4898-bdb0-3c005320545d
 
+## Summary
 
+- [Disclaimer](#disclaimer)
+- [Features](#features)
+- [Download and run (no coding required)](#download-and-run-no-coding-required)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Usage](#usage)
+- [Important notes](#important-notes)
+- [Troubleshooting](#troubleshooting)
+- [Project structure (development)](#project-structure-development)
 
 ## Disclaimer
 
