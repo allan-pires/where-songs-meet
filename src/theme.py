@@ -18,6 +18,8 @@ FG_DISABLED = '#a0a8c0'  # Readable on SUBTLE when button is disabled
 BORDER = '#414868'
 # Unselected tab — lighter than SUBTLE so tabs are clearly distinct
 TAB_BG_UNSELECTED = '#6b7ab4'
+# Title / branding (matches app icon gold)
+TITLE_GOLD = '#eab308'
 
 # Typography
 FONT_FAMILY = 'Segoe UI'

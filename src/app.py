@@ -260,7 +260,7 @@ class App:
         content.pack(fill='both', expand=True, padx=BORDER_WIDTH, pady=BORDER_WIDTH)
         header = tk.Frame(content, bg=BG)
         header.pack(fill='x', padx=PAD, pady=(PAD, 2))
-        title_label = tk.Label(header, text='Where Songs Meet', font=TITLE_FONT, fg=ACCENT, bg=BG)
+        title_label = tk.Label(header, text='Where Songs Meet', font=TITLE_FONT, fg=_t.TITLE_GOLD, bg=BG)
         title_label.pack(side='left', anchor='w')
         version_label = tk.Label(header, text=f'  v{APP_VERSION}', font=SMALL_FONT, fg=SUBTLE, bg=BG)
         version_label.pack(side='left', anchor='w')
