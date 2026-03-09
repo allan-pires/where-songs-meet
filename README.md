@@ -1,6 +1,6 @@
 # Where Songs Meet (Windows)
 
-Convert MIDI files to macro (.mcr) command files and play them as keyboard input in real time. Includes support for local files, **onlinesequencer.net** sequences, a playlist, and synced “play together” rooms.
+Read MIDI files and play them as keyboard input in real time. Includes support for local files, **onlinesequencer.net** sequences, a playlist, and synced “play together” rooms.
 
 https://github.com/user-attachments/assets/2d31b7ef-e86d-4898-bdb0-3c005320545d
 
