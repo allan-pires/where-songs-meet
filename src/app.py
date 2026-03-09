@@ -1086,13 +1086,15 @@ class App:
                 if 'e' in edge:
                     w = max(MIN_W, w0 + dx)
                 if 'w' in edge:
-                    dw = min(0, max(-(w0 - MIN_W), dx))
+                    # Drag left (dx < 0) grows width; delta = -dx clamped so w >= MIN_W
+                    dw = max(MIN_W - w0, -dx)
                     w = w0 + dw
                     x = x0 - dw
                 if 's' in edge:
                     h = max(MIN_H, h0 + dy)
                 if 'n' in edge:
-                    dh = min(0, max(-(h0 - MIN_H), dy))
+                    # Drag up (dy < 0) grows height; delta = -dy clamped so h >= MIN_H
+                    dh = max(MIN_H - h0, -dy)
                     h = h0 + dh
                     y = y0 - dh
                 self._resize_pending = (w, h, x, y)
