@@ -310,13 +310,13 @@ class App:
             file_inner, text='No folder selected', font=SMALL_FONT,
             fg=SUBTLE, bg=CARD, anchor='w'
         )
-        self.folder_label.grid(row=1, column=0, sticky='ew', padx=(0, 8))
-        file_inner.columnconfigure(0, weight=1)
+        self.folder_label.grid(row=1, column=1, sticky='ew', padx=(8, 0))
         open_folder_btn = tk.Button(
             file_inner, command=self.open_folder,
             **_icon_btn_kwargs('FOLDER')
         )
-        open_folder_btn.grid(row=1, column=1, sticky='e')
+        open_folder_btn.grid(row=1, column=0, sticky='w')
+        file_inner.columnconfigure(1, weight=1)
         open_folder_btn.bind('<Enter>', lambda e: open_folder_btn.configure(bg=ACCENT))
         open_folder_btn.bind('<Leave>', lambda e: open_folder_btn.configure(bg=CARD))
         tk.Label(file_inner, text='MIDI file', font=LABEL_FONT, fg=FG, bg=CARD).grid(
